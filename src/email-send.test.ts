@@ -212,13 +212,14 @@ describe("sendOrDraftEmail — from auto-resolution", () => {
     await sendOrDraftEmail(client, "send", args);
     expect(args.from).toBe("explicit@example.com");
     expect(calls.messageSend).toHaveLength(1);
-    // Pin the contract directly: if `from` is supplied, the resolver
-    // path is fully short-circuited — neither `sendAs.list` nor
-    // `getProfile` (the two API calls inside `resolveDefaultSender`)
-    // is invoked. Without this, the test would still pass even if the
-    // resolver fired and happened to produce the same value the
-    // caller had set, hiding a wasted round-trip on every send.
-    expect(calls.sendAsList).toHaveLength(0);
+    // `getProfile` belongs to resolveDefaultSender's fallback chain and
+    // must stay at 0 when `from` is supplied — that path is the one
+    // we're pinning as short-circuited. `sendAs.list` is also reached
+    // by resolveSignature (which fires regardless of whether `from`
+    // is supplied, because the signature is keyed on the resolved
+    // alias), so we accept the one call from that resolver and pin
+    // it tightly here.
+    expect(calls.sendAsList).toHaveLength(1);
     expect(calls.getProfile).toHaveLength(0);
   });
 });

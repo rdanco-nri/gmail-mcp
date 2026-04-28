@@ -20,6 +20,7 @@
 import type { gmail_v1 } from "googleapis";
 import { ValidatedEmailArgs, createEmailMessage, createEmailWithNodemailer } from "./utl.js";
 import { resolveDefaultSender } from "./sender-resolver.js";
+import { resolveSignature, injectSignature } from "./signature-resolver.js";
 import { requirePairedRecipients } from "./recipient-pairing.js";
 import { asGmailApiError } from "./gmail-errors.js";
 
@@ -79,6 +80,20 @@ export async function sendOrDraftEmail(
     if (!validatedArgs.from || validatedArgs.from.trim() === "") {
       validatedArgs.from = await resolveDefaultSender(gmail);
     }
+
+    // Auto-append the Gmail-configured HTML signature for the resolved
+    // From: alias. Gmail's API does not inject signatures into
+    // programmatically created drafts/sends — only the web UI does
+    // that — so without this step every outgoing message ships
+    // unsigned. injectSignature is idempotent (no-op if the marker is
+    // already present in htmlBody) and safe when no signature is
+    // configured (resolveSignature returns undefined and the helper
+    // bails). When invoked on a plain-text-only body, it promotes the
+    // message to multipart/alternative so the signature's HTML
+    // (logos, links, custom styling) renders correctly while keeping
+    // the original plain text as a fallback alternative.
+    const signature = await resolveSignature(gmail, validatedArgs.from);
+    injectSignature(validatedArgs, signature);
 
     // Auto-resolve threading headers when threadId is provided but inReplyTo is missing
     if (validatedArgs.threadId && !validatedArgs.inReplyTo) {

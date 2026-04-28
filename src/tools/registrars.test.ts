@@ -1916,7 +1916,13 @@ describe("PR #7 registrars — reply_all", () => {
       // `users.settings.sendAs.list`. Pin both the call AND the
       // resulting MIME stamp so a regression that drops the resolver
       // (or that mis-wires its result) cannot pass this test.
-      expect(fix.calls.sendAsList).toHaveLength(1);
+      // `sendAs.list` is reached twice: once by resolveDefaultSender
+      // (above, for the From: header) and once by resolveSignature
+      // (which appends Gmail's configured HTML signature to outgoing
+      // mail). Both share the same shape but maintain independent
+      // caches today; if they're consolidated to a shared cache later,
+      // bring this assertion back down to 1.
+      expect(fix.calls.sendAsList).toHaveLength(2);
       expect(fromLine).toContain("me@example.com");
     });
   });
