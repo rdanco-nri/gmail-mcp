@@ -33,6 +33,7 @@ import {
   DriveListSharedDrivesSchema,
   DriveListCommentsSchema,
   DriveReplyToCommentSchema,
+  DriveTrashFileSchema,
 } from "../tools.js";
 import {
   resolveDownloadSavePath,
@@ -632,6 +633,55 @@ export function registerDriveTools(
     },
     commentsMeta.annotations,
     commentsMeta.scopes,
+    authorizedScopes,
+  );
+
+  // ---- drive_trash_file ----
+  const trashMeta = pull("drive_trash_file");
+  defineTool(
+    server,
+    "drive_trash_file",
+    trashMeta.description,
+    DriveTrashFileSchema.shape,
+    async (args) => {
+      try {
+        const res = await drive.files.update({
+          fileId: args.fileId,
+          requestBody: { trashed: true },
+          fields: "id,name,mimeType,trashed",
+          supportsAllDrives: true,
+        });
+        const result = {
+          status: "trashed" as const,
+          fileId: args.fileId,
+          name: res.data.name ?? null,
+          mimeType: res.data.mimeType ?? null,
+          trashed: res.data.trashed ?? true,
+          recovery_window_days: 30,
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Drive file moved to Trash: ${res.data.name ?? args.fileId}. Recoverable from Drive Trash for ~30 days.`,
+            },
+          ],
+          structuredContent: result,
+        };
+      } catch (err) {
+        const { code, message } = asGmailApiError(err);
+        if (code === 404) return structuredError(`File not found: ${message}`);
+        if (code === 403)
+          return structuredError(`Insufficient permissions to trash this file: ${message}`);
+        const prefix =
+          code !== undefined
+            ? `drive_trash_file failed (HTTP ${code})`
+            : "drive_trash_file failed";
+        return structuredError(`${prefix}: ${message}`);
+      }
+    },
+    trashMeta.annotations,
+    trashMeta.scopes,
     authorizedScopes,
   );
 

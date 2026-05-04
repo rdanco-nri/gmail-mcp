@@ -628,6 +628,10 @@ export const DriveReplyToCommentSchema = z.object({
   content: z.string().min(1).max(50_000).describe("Reply text content. Plain text."),
 });
 
+export const DriveTrashFileSchema = z.object({
+  fileId: DriveIdSchema.describe("Drive file ID to move to Trash."),
+});
+
 // Slides outline shape — one slide.
 export const SlideOutlineSchema = z.object({
   title: z.string().max(500).describe("Slide title (rendered in the TITLE placeholder)."),
@@ -1170,6 +1174,21 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: DriveListCommentsSchema,
     scopes: ["drive", "drive.readonly"],
     annotations: { title: "Drive: List Comments", readOnlyHint: true },
+  },
+  {
+    name: "drive_trash_file",
+    description: [
+      "Move a Drive file to Trash. Reversible: the file stays in Trash for 30 days, after which Drive auto-purges it. **Not** a permanent delete.",
+      "",
+      "USE WHEN: cleaning up test artifacts or files the user explicitly asked to remove. Idempotent — calling on an already-trashed file is a no-op. Always confirm with the user before calling, even though the operation is reversible.",
+      "",
+      "DO NOT USE: as a permanent delete (Drive's hard-delete endpoint isn't exposed by this MCP — pull a file out of Trash via Drive UI if needed, or wait 30 days). On Drive folders, this trashes the folder AND every file underneath it; confirm folder contents first via `drive_search`.",
+      "",
+      "SIDE EFFECTS: file disappears from active Drive views, still recoverable from Trash for 30 days. Email-notify behavior depends on the file's sharing settings.",
+    ].join("\n"),
+    schema: DriveTrashFileSchema,
+    scopes: ["drive"],
+    annotations: { title: "Drive: Trash File", destructiveHint: true, idempotentHint: true },
   },
   {
     name: "drive_reply_to_comment",

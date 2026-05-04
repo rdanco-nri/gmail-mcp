@@ -143,7 +143,7 @@ See [llms-install.md](./llms-install.md) for an LLM-readable install guide.
 
 ## 🔑 OAuth scopes
 
-| Scope shorthand | Full Gmail scope | What it grants |
+| Scope shorthand | Full scope | What it grants |
 |---|---|---|
 | `gmail.readonly` | `…/auth/gmail.readonly` | Read messages, threads, labels (filter tools require `gmail.settings.basic`) |
 | `gmail.modify` | `…/auth/gmail.modify` | Readonly + apply/remove labels, delete messages |
@@ -151,6 +151,12 @@ See [llms-install.md](./llms-install.md) for an LLM-readable install guide.
 | `gmail.send` | `…/auth/gmail.send` | Send messages |
 | `gmail.labels` | `…/auth/gmail.labels` | Manage labels only |
 | `gmail.settings.basic` | `…/auth/gmail.settings.basic` | Manage filters |
+| `drive` | `…/auth/drive` | Full Drive read/write — required for replying to comments on docs not created by this app and for trashing files. Restricted scope per Google policy. |
+| `drive.readonly` | `…/auth/drive.readonly` | Drive read-only variant (no comment replies, no trash). |
+| `drive.file` | `…/auth/drive.file` | Picker-only writes (registered for forward compat; not currently used). |
+| `spreadsheets.readonly` | `…/auth/spreadsheets.readonly` | Sheets API read — required for multi-tab Sheets reads in `drive_read_file`. |
+| `presentations` | `…/auth/presentations` | Slides API read+write — required for `slides_*` tools. |
+| `documents` | `…/auth/documents` | Docs API read+write — pre-authorized for forward-compat Docs-write tools. |
 
 Recipes:
 
@@ -172,6 +178,16 @@ npx @klodr/gmail-mcp auth --scopes=gmail.modify,gmail.settings.basic
 # even though Google's scope hierarchy would technically accept the
 # same calls.
 npx @klodr/gmail-mcp auth --scopes=gmail.modify,mail.google.com,gmail.settings.basic
+
+# Gmail + Drive + Slides (the v0.31 surface — recommended default
+# for the full Workspace flow). `prompt: "consent"` and
+# `include_granted_scopes: true` are auto-set on the auth URL so
+# the browser only shows the new Drive/Sheets/Slides/Docs consent
+# screen on top of any existing Gmail consent, AND Google returns
+# a fresh refresh_token. Before running, enable the Drive, Sheets,
+# and Slides APIs in your Google Cloud project (one-time, takes
+# ~1 minute to propagate).
+npx @klodr/gmail-mcp auth --scopes=gmail.modify,gmail.settings.basic,drive,spreadsheets.readonly,presentations,documents
 ```
 
 ## 🛡️ Safeguards
@@ -186,7 +202,7 @@ npx @klodr/gmail-mcp auth --scopes=gmail.modify,mail.google.com,gmail.settings.b
 | Rate limit overrides | `GMAIL_MCP_RATE_LIMIT_<bucket>=D/day,M/month` | see below | Override the per-bucket daily/monthly caps. Buckets: `send` (100/2000), `delete` (200/2000), `modify` (500/5000), `drafts` (300/3000), `labels` (50/500), `filters` (20/200). The `send` cap is sized at the upper end of a human professional workload (~40 emails/day with a 2.5× cushion); raise it via `GMAIL_MCP_RATE_LIMIT_send=400/day,6000/month` if you need the pre-v0.30.2 default. The bucket name is lowercase and matches the tool family. |
 | Rate limit disable | `GMAIL_MCP_RATE_LIMIT_DISABLE=true` | unset (limiter active) | Kill-switch for the entire limiter. Use only for test suites or controlled batch operations. |
 | Audit log | `GMAIL_MCP_AUDIT_LOG=/abs/path/audit.jsonl` | unset (no audit trail) | Opt-in append-only JSONL log of every tool call (name, redacted args, outcome). File mode `0o600`. Must be an absolute path; relative paths are rejected at startup. Redaction keeps structural keys and drops values under an allowlist. |
-| Dry-run | `GMAIL_MCP_DRY_RUN=true` | unset (real calls) | When `"true"` (strict match), every write tool (`send_email`, `reply_all`, `reply_to_email`, `forward_email`, `draft_email`, `delete_email`, `modify_email`, `batch_modify_emails`, `batch_delete_emails`, `create_label`, `update_label`, `delete_label`, `get_or_create_label`, `create_filter`, `delete_filter`, `create_filter_from_template`, `modify_thread`) short-circuits before reaching Gmail and returns the redacted payload it would have sent. Useful for CI smoke tests, agent debugging, and human-in-the-loop approval flows. Read tools ignore the flag (nothing to preview). Matches `MERCURY_MCP_DRY_RUN` / `FAXDROP_MCP_DRY_RUN` on the sibling servers. |
+| Dry-run | `GMAIL_MCP_DRY_RUN=true` | unset (real calls) | When `"true"` (strict match), every write tool short-circuits before reaching Google and returns the redacted payload it would have sent. Covers Gmail writes (`send_email`, `reply_all`, `reply_to_email`, `forward_email`, `draft_email`, `delete_email`, `modify_email`, `batch_modify_emails`, `batch_delete_emails`, `create_label`, `update_label`, `delete_label`, `get_or_create_label`, `create_filter`, `delete_filter`, `create_filter_from_template`, `modify_thread`) and Drive/Slides writes (`drive_reply_to_comment`, `drive_trash_file`, `slides_create_deck_from_outline`, `slides_append_to_deck`). Useful for CI smoke tests, agent debugging, and human-in-the-loop approval flows. Read tools ignore the flag (nothing to preview). Matches `MERCURY_MCP_DRY_RUN` / `FAXDROP_MCP_DRY_RUN` on the sibling servers. |
 
 ## 🛠️ Tools
 
@@ -197,6 +213,8 @@ The exact set depends on the OAuth scopes granted at `auth` time. Full catalog:
 - **Labels** — `list_email_labels`, `create_label`, `update_label`, `delete_label`, `get_or_create_label`
 - **Filters** — `list_filters`, `get_filter`, `create_filter`, `delete_filter`, `create_filter_from_template`
 - **Recipient pairing** — `pair_recipient` (manage the `~/.gmail-mcp/paired.json` allowlist when `GMAIL_MCP_RECIPIENT_PAIRING=true`)
+- **Drive (v0.31)** — `drive_search`, `drive_get_metadata`, `drive_read_file`, `drive_download_file`, `drive_list_shared_drives`, `drive_list_comments`, `drive_reply_to_comment`, `drive_trash_file`. `drive_read_file` dispatches on mimeType: Docs → markdown via `files.export`, Sheets → all-tabs CSV via the Sheets API (Drive's `files.export(text/csv)` only returns the first tab), Slides → structured outline via the Slides API, PDFs/images/binaries → saved into the existing download jail. Comment discovery is via Gmail (`search_emails` for `from:comments-noreply@docs.google.com`); there's no Drive API "comment inbox" endpoint.
+- **Slides (v0.31)** — `slides_create_deck_from_outline`, `slides_append_to_deck`. Both take a structured outline (title + bullets per slide) and use a three-phase create→get→insertText flow because Google's default theme inherits TITLE/BODY placeholders from the master rather than the layout, which breaks the canonical `placeholderIdMappings` pattern.
 
 Every write tool is annotated with `destructiveHint` / `readOnlyHint` / `idempotentHint` per the MCP spec so policy-aware clients can gate on HITL confirmation.
 

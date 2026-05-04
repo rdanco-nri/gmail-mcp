@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `drive_list_shared_drives` — enumerate shared drives.
   - `drive_list_comments` — list comments with reply threads inline-expanded in one call (no N+1 `replies.list` loop). `includeResolved: false` by default. Discovery pattern documented in the tool description: use the existing Gmail `search_emails` with `from:comments-noreply@docs.google.com` to find files with new comments.
   - `drive_reply_to_comment` — reply to an existing comment thread. **Requires the full `drive` scope** (third-party file replies aren't writable with `drive.file`).
+  - `drive_trash_file` — move a Drive file to Trash (recoverable for 30 days; not a permanent delete). Idempotent. Closes the cleanup gap surfaced during smoke testing — without it, the only way to delete a deck created by `slides_create_deck_from_outline` was to drop into the Drive UI or run an out-of-band Node script.
   - `slides_create_deck_from_outline` — `presentations.create` followed by ONE `batchUpdate` that uses `placeholderIdMappings` to pre-assign predictable placeholder IDs and inserts title + bullets in the same call (the honest two-call pattern; no per-slide discovery GET). First slide renders as `TITLE+SUBTITLE`; the rest use `TITLE_AND_BODY`.
   - `slides_append_to_deck` — `batchUpdate` with the same `placeholderIdMappings` pattern; appends slides to an existing deck.
 

@@ -76,6 +76,7 @@ const TOOL_BUCKET: Record<string, string> = {
   // a slide draft, appending follow-up slides. Same bucket so a
   // run-away agent can't burn down all three independently.
   drive_reply_to_comment: "workspace_writes",
+  drive_trash_file: "workspace_writes",
   slides_create_deck_from_outline: "workspace_writes",
   slides_append_to_deck: "workspace_writes",
 };

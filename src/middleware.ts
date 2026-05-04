@@ -57,6 +57,7 @@ const WRITE_TOOLS = new Set<string>([
   // feeds — so dry-run + rate-limit coverage is required parity
   // with Gmail send-side mutations.
   "drive_reply_to_comment",
+  "drive_trash_file",
   "slides_create_deck_from_outline",
   "slides_append_to_deck",
 ]);
