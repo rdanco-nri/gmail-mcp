@@ -518,6 +518,146 @@ export const ForwardEmailSchema = z.object({
     ),
 });
 
+// =====================================================================
+// Drive / Slides schemas (v0.31 — extends MCP beyond Gmail)
+// =====================================================================
+//
+// Drive file IDs are URL-safe strings (Drive uses base64url-ish chars
+// plus underscores) but vary in length more than Gmail IDs. Bound at
+// 256 chars (well above realistic max — Drive IDs are typically
+// 33-44 chars).
+const DriveIdSchema = z.string().min(1).max(256);
+
+export const DriveSearchSchema = z.object({
+  query: z
+    .string()
+    .describe(
+      "Drive search query string (Drive 'q' syntax). Examples: \"name contains 'budget'\", \"fullText contains 'quarterly review'\", \"mimeType = 'application/vnd.google-apps.document' and modifiedTime > '2024-01-01T00:00:00'\", \"sharedWithMe = true\". Defaults exclude trashed.",
+    ),
+  pageSize: coerceInt({ min: 1, max: 1000 })
+    .optional()
+    .default(20)
+    .describe("Max results per page (1-1000, default 20)."),
+  includeSharedDrives: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Include items from shared drives (default true)."),
+  fields: z
+    .string()
+    .optional()
+    .describe(
+      "Override partial-response fields. Default: 'files(id,name,mimeType,owners(displayName,emailAddress),modifiedTime,parents,webViewLink),nextPageToken'.",
+    ),
+  pageToken: z
+    .string()
+    .optional()
+    .describe("Continuation token from a previous response's nextPageToken."),
+});
+
+export const DriveGetMetadataSchema = z.object({
+  fileId: DriveIdSchema.describe("Drive file ID."),
+  fields: z
+    .string()
+    .optional()
+    .describe(
+      "Override partial-response fields. Default returns id, name, mimeType, owners, parents, modifiedTime, capabilities, webViewLink, shortcutDetails, size.",
+    ),
+  followShortcut: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("If true (default), shortcuts resolve to the target file's metadata."),
+});
+
+export const DriveReadFileSchema = z.object({
+  fileId: DriveIdSchema.describe("Drive file ID."),
+  maxChars: coerceInt({ min: 1000, max: 5_000_000 })
+    .optional()
+    .default(200_000)
+    .describe(
+      "Maximum text-body size to return inline. Default 200000 (~50 KB UTF-8). Output beyond the cap is truncated with a marker; binary files ignore this and always save to disk.",
+    ),
+  savePath: z
+    .string()
+    .optional()
+    .describe(
+      "For binary files only — directory inside GMAIL_MCP_DOWNLOAD_DIR to save to. Defaults to the download dir root.",
+    ),
+});
+
+export const DriveDownloadFileSchema = z.object({
+  fileId: DriveIdSchema.describe(
+    "Drive file ID. Native Workspace types (Docs/Sheets/Slides) cannot be downloaded raw — use drive_read_file instead, which exports them.",
+  ),
+  filename: z
+    .string()
+    .optional()
+    .describe("Filename to save as. Defaults to the Drive file's name."),
+  savePath: z
+    .string()
+    .optional()
+    .describe("Directory inside GMAIL_MCP_DOWNLOAD_DIR. Defaults to the download dir root."),
+});
+
+export const DriveListSharedDrivesSchema = z.object({
+  pageSize: coerceInt({ min: 1, max: 100 })
+    .optional()
+    .default(50)
+    .describe("Max shared drives per page (1-100, default 50)."),
+  pageToken: z.string().optional().describe("Continuation token."),
+});
+
+export const DriveListCommentsSchema = z.object({
+  fileId: DriveIdSchema.describe("Drive file ID to list comments on."),
+  includeResolved: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Include resolved comments (default false to suppress historical noise)."),
+  pageSize: coerceInt({ min: 1, max: 100 })
+    .optional()
+    .default(50)
+    .describe("Max comments per page (1-100, default 50). Replies are inline-expanded per comment."),
+  pageToken: z.string().optional().describe("Continuation token."),
+});
+
+export const DriveReplyToCommentSchema = z.object({
+  fileId: DriveIdSchema.describe("Drive file ID containing the comment."),
+  commentId: DriveIdSchema.describe("Comment ID to reply to (from drive_list_comments)."),
+  content: z.string().min(1).max(50_000).describe("Reply text content. Plain text."),
+});
+
+// Slides outline shape — one slide.
+export const SlideOutlineSchema = z.object({
+  title: z.string().max(500).describe("Slide title (rendered in the TITLE placeholder)."),
+  bullets: coerceArray(z.string().max(2000), { max: 50 })
+    .optional()
+    .describe("Bullet points for the BODY placeholder. Optional. Each entry becomes one bullet."),
+  speakerNotes: z
+    .string()
+    .max(20000)
+    .optional()
+    .describe("Optional speaker notes for the slide."),
+});
+
+export const SlidesCreateDeckFromOutlineSchema = z.object({
+  title: z.string().min(1).max(255).describe("Deck title (also becomes the Drive file name)."),
+  slides: coerceArray(SlideOutlineSchema, { max: 100 }).describe(
+    "Ordered list of slide outlines. The first item renders as a TITLE+SUBTITLE slide; remaining items use TITLE_AND_BODY layout.",
+  ),
+  parentFolderId: DriveIdSchema.optional().describe(
+    "Optional Drive folder ID to create the deck in. Defaults to My Drive root.",
+  ),
+});
+
+export const SlidesAppendToDeckSchema = z.object({
+  presentationId: DriveIdSchema.describe("Existing Slides deck ID to append slides to."),
+  slides: coerceArray(SlideOutlineSchema, { max: 100 }).describe(
+    "Ordered list of slide outlines to append at the end (TITLE_AND_BODY layout).",
+  ),
+});
+
 // Tool definition type
 export interface ToolAnnotations {
   title: string;
@@ -944,6 +1084,141 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: ReplyToEmailSchema,
     scopes: ["gmail.modify", "gmail.compose", "gmail.send"],
     annotations: { title: "Reply To Email", destructiveHint: false },
+  },
+
+  // =====================================================================
+  // Drive operations (v0.31)
+  // =====================================================================
+  {
+    name: "drive_search",
+    description: [
+      "Search Google Drive by name, full-text content, mimeType, modifiedTime, parent, owner, or any other Drive `q=` operator.",
+      "",
+      "USE WHEN: locating a file by content (`fullText contains 'quarterly review'`), by name pattern (`name contains 'budget'`), by type (`mimeType = 'application/vnd.google-apps.document'`), or by sharing (`sharedWithMe = true`). Returns the lightweight metadata an agent needs to call drive_get_metadata, drive_read_file, or drive_list_comments next.",
+      "",
+      "DO NOT USE: to read file content (use `drive_read_file`). For one specific fileId, use `drive_get_metadata`. To list shared drives, use `drive_list_shared_drives`.",
+    ].join("\n"),
+    schema: DriveSearchSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: Search", readOnlyHint: true },
+  },
+  {
+    name: "drive_get_metadata",
+    description: [
+      "Retrieve metadata for one Drive file by ID — name, mimeType, owners, parents, modifiedTime, capabilities, webViewLink, size, shortcutDetails.",
+      "",
+      "USE WHEN: a fileId is already known and you need to inspect it (often to decide which `drive_read_file` branch will fire — Workspace doc vs PDF vs binary). On shortcuts, returns the target file's metadata by default.",
+      "",
+      "DO NOT USE: to read content (use `drive_read_file`). To enumerate files, use `drive_search`.",
+    ].join("\n"),
+    schema: DriveGetMetadataSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: Get Metadata", readOnlyHint: true },
+  },
+  {
+    name: "drive_read_file",
+    description: [
+      "Read a Drive file's content into the LLM context (or save it to disk if binary). Dispatches on mimeType: Google Docs → markdown (with text/plain fallback); Google Sheets → all tabs as CSV via Sheets API (multi-tab safe — Drive's files.export(text/csv) only returns the first tab); Google Slides → structured outline via Slides API (slide titles + bullets + speaker notes); PDFs / images / arbitrary binaries → saved under GMAIL_MCP_DOWNLOAD_DIR. Shortcuts resolve to their target before reading.",
+      "",
+      "USE WHEN: pulling Drive content into the conversation. The single tool covers every common filetype Rob touches; use `drive_download_file` only when you need the raw binary path without parsing.",
+      "",
+      "DO NOT USE: on Drive folders (returns a structured error suggesting drive_search with `'<folderId>' in parents`). Drawings / Forms / Jamboards have no useful text export and return a structured error rather than a silent empty file. Files exceeding Drive's 10 MB export cap return `exportSizeLimitExceeded` — fall back to `drive_download_file` for the raw bytes.",
+      "",
+      "SIDE EFFECTS: text content is returned inline (truncated with a marker if it exceeds `maxChars`). Binary files are written to GMAIL_MCP_DOWNLOAD_DIR via the same O_NOFOLLOW/O_EXCL jail used for Gmail attachments — destination path is returned in the response.",
+    ].join("\n"),
+    schema: DriveReadFileSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: Read File", readOnlyHint: true },
+  },
+  {
+    name: "drive_download_file",
+    description: [
+      "Download a non-Workspace Drive file (PDF, image, Office doc, arbitrary binary) to GMAIL_MCP_DOWNLOAD_DIR.",
+      "",
+      "USE WHEN: persisting a binary to disk for downstream tooling, or when `drive_read_file` returned an `exportSizeLimitExceeded` and you want the raw bytes anyway.",
+      "",
+      "DO NOT USE: on native Google Workspace types (Docs / Sheets / Slides) — Drive returns 403 on `alt=media` for those; use `drive_read_file` which routes through `files.export` / Sheets API / Slides API instead. To read inline content, use `drive_read_file`.",
+      "",
+      "SIDE EFFECTS: writes a file under GMAIL_MCP_DOWNLOAD_DIR using the same O_NOFOLLOW/O_EXCL jail as Gmail attachments. Returns the absolute path.",
+    ].join("\n"),
+    schema: DriveDownloadFileSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: Download File", readOnlyHint: true },
+  },
+  {
+    name: "drive_list_shared_drives",
+    description: [
+      "List the shared drives the authenticated user is a member of.",
+      "",
+      "USE WHEN: discovering shared-drive IDs to scope a `drive_search` (with `driveId`/`corpora` filters) or to confirm membership of a known shared drive.",
+      "",
+      "DO NOT USE: to list files in a shared drive (use `drive_search` with `includeItemsFromAllDrives` and a `'<driveId>' in parents` filter).",
+    ].join("\n"),
+    schema: DriveListSharedDrivesSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: List Shared Drives", readOnlyHint: true },
+  },
+  {
+    name: "drive_list_comments",
+    description: [
+      "List comments on a Drive file with reply threads inline-expanded in a single call.",
+      "",
+      "USE WHEN: reviewing comments left on a Doc / Sheet / Slides for response. The Drive API has no cross-file comment inbox endpoint — to discover *which* files have new comments addressed to you, use the existing Gmail tool `search_emails` with `from:comments-noreply@docs.google.com newer_than:7d`, extract the fileId from the notification email body or URL, then call this tool. By default resolved comments are excluded (set `includeResolved: true` to include them).",
+      "",
+      "DO NOT USE: to read the underlying file content (use `drive_read_file`).",
+    ].join("\n"),
+    schema: DriveListCommentsSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: { title: "Drive: List Comments", readOnlyHint: true },
+  },
+  {
+    name: "drive_reply_to_comment",
+    description: [
+      "Reply to an existing comment on a Drive file. **The reply is posted immediately and is visible to every collaborator on the file.**",
+      "",
+      "USE WHEN: responding to review feedback that was discovered via `drive_list_comments` (typically discovered via Gmail comment notifications first). ALWAYS confirm the reply text with the user before calling — the post is immediate, public to collaborators, and email-notifies them.",
+      "",
+      "DO NOT USE: to leave a brand-new comment anchor on a passage of text — Drive API supports `comments.create` for that, but this tool is intentionally restricted to threaded replies (lower blast radius for an LLM-driven workflow). To draft an unsent reply, paste it into the reply box manually in the Doc UI.",
+      "",
+      "SIDE EFFECTS: persistent comment reply on Drive, broadcast to all collaborators on the file via Google's notification settings. Requires the full `drive` scope — `drive.readonly` is rejected.",
+    ].join("\n"),
+    schema: DriveReplyToCommentSchema,
+    scopes: ["drive"],
+    annotations: { title: "Drive: Reply To Comment", destructiveHint: false },
+  },
+
+  // =====================================================================
+  // Slides operations (v0.31)
+  // =====================================================================
+  {
+    name: "slides_create_deck_from_outline",
+    description: [
+      "Create a new Google Slides deck from a structured outline. Takes a deck title and an ordered list of slides, each with a title, optional bullets, and optional speaker notes. The first slide renders as a TITLE+SUBTITLE cover slide; the rest use TITLE_AND_BODY layout. **The new deck is saved to Drive immediately.**",
+      "",
+      "USE WHEN: drafting a fresh deck from outline content (e.g. a structured outline produced by Claude). The returned `presentationId` + `webViewLink` lets the user open the deck for manual review/styling. Layout defaults to whatever the deck theme provides.",
+      "",
+      "DO NOT USE: to populate an existing deck — use `slides_append_to_deck` for that. Styling, layout selection, image insertion, and speaker-note formatting beyond plain text are out of scope.",
+      "",
+      "SIDE EFFECTS: writes a new presentation to Drive (in My Drive root or `parentFolderId` if specified). Persistent. Counts toward Drive storage quota. Two API round-trips per call (create + batchUpdate with placeholderIdMappings + insertText). Requires both `drive` (for Drive file creation / parent placement) and `presentations` scope.",
+    ].join("\n"),
+    schema: SlidesCreateDeckFromOutlineSchema,
+    scopes: ["presentations"],
+    annotations: { title: "Slides: Create Deck from Outline", destructiveHint: false },
+  },
+  {
+    name: "slides_append_to_deck",
+    description: [
+      "Append slides to an existing Google Slides deck by ID. Same outline shape as `slides_create_deck_from_outline` (TITLE_AND_BODY layout). **Slides are appended immediately and are visible to every collaborator on the deck.**",
+      "",
+      "USE WHEN: iterating on a draft deck — adding more slides after the user reviewed the initial output, or programmatically extending an existing deck with new content. The deck must already exist (use `slides_create_deck_from_outline` to create one).",
+      "",
+      "DO NOT USE: to create a new deck (use `slides_create_deck_from_outline`). Editing existing slides' content is not supported — append-only.",
+      "",
+      "SIDE EFFECTS: persistent slide additions on the existing deck, visible to collaborators. Single batchUpdate call (createSlide with predefined placeholderIdMappings + insertText in the same request). Requires the `presentations` scope.",
+    ].join("\n"),
+    schema: SlidesAppendToDeckSchema,
+    scopes: ["presentations"],
+    annotations: { title: "Slides: Append To Deck", destructiveHint: false },
   },
 
   // Forward operation

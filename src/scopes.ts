@@ -1,6 +1,6 @@
-// Gmail API OAuth2 scope definitions and helpers
+// Google Workspace API OAuth2 scope definitions and helpers
 //
-// Scope hierarchy (for reference):
+// Gmail scope hierarchy (for reference):
 //   - gmail.readonly: Read-only access to emails
 //   - gmail.modify: Read AND write access except permanent delete
 //   - gmail.compose: Create drafts and send emails
@@ -14,6 +14,23 @@
 // scope that authorizes users.messages.delete / users.threads.delete
 // (purge from Trash) — gmail.modify alone returns HTTP 403
 // "Insufficient Permission" on those endpoints.
+//
+// Drive / Sheets / Slides / Docs scopes (added in v0.31):
+//   - drive: Full Drive read+write. Needed for replying to comments
+//     on docs not created by this app (drive.file would block that).
+//     Restricted scope per Google's verification policy; fine in
+//     OAuth Consent "Testing" mode for personal use.
+//   - drive.readonly: Read-only Drive access (registered for opt-in
+//     read-only deployments; not in DEFAULT_SCOPES).
+//   - drive.file: Picker-only writes (registered for forward
+//     compatibility; not currently used).
+//   - spreadsheets.readonly: Sheets API read. Required for multi-tab
+//     Sheets reads — Drive's files.export(text/csv) only returns the
+//     first/active tab.
+//   - presentations: Slides API read+write — needed to create or
+//     populate decks programmatically.
+//   - documents: Docs API read+write — pre-authorized for forward-
+//     compatible Docs drafting tools.
 
 // Map shorthand scope names to full Google API URLs
 export const SCOPE_MAP: Record<string, string> = {
@@ -25,6 +42,13 @@ export const SCOPE_MAP: Record<string, string> = {
   "gmail.settings.basic": "https://www.googleapis.com/auth/gmail.settings.basic",
   "gmail.settings.sharing": "https://www.googleapis.com/auth/gmail.settings.sharing",
   "mail.google.com": "https://mail.google.com/",
+  // Drive / Sheets / Slides / Docs — added v0.31
+  drive: "https://www.googleapis.com/auth/drive",
+  "drive.readonly": "https://www.googleapis.com/auth/drive.readonly",
+  "drive.file": "https://www.googleapis.com/auth/drive.file",
+  "spreadsheets.readonly": "https://www.googleapis.com/auth/spreadsheets.readonly",
+  presentations: "https://www.googleapis.com/auth/presentations",
+  documents: "https://www.googleapis.com/auth/documents",
 };
 
 // Reverse map for converting full URLs back to shorthand

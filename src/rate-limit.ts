@@ -70,6 +70,14 @@ const TOOL_BUCKET: Record<string, string> = {
   create_filter: "filters",
   delete_filter: "filters",
   create_filter_from_template: "filters",
+
+  // Drive / Slides write tools (v0.31). All three are low-volume
+  // human-paced operations: replying to a review comment, creating
+  // a slide draft, appending follow-up slides. Same bucket so a
+  // run-away agent can't burn down all three independently.
+  drive_reply_to_comment: "workspace_writes",
+  slides_create_deck_from_outline: "workspace_writes",
+  slides_append_to_deck: "workspace_writes",
 };
 
 interface BucketLimit {
@@ -106,6 +114,10 @@ const DEFAULT_BUCKET_LIMITS: Record<string, BucketLimit> = {
   drafts: { daily: 300, monthly: 3000 },
   labels: { daily: 50, monthly: 500 },
   filters: { daily: 20, monthly: 200 },
+  // workspace_writes covers comment replies + deck create/append.
+  // Sized for a busy review day (replying to many comments) plus
+  // active deck drafting; well below upstream Drive/Slides quotas.
+  workspace_writes: { daily: 100, monthly: 1500 },
 };
 
 function parseOverride(raw: string): BucketLimit | null {

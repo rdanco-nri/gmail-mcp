@@ -51,6 +51,14 @@ const WRITE_TOOLS = new Set<string>([
   "delete_filter",
   "create_filter_from_template",
   "modify_thread",
+  // Drive / Slides write tools (v0.31). All three mutate state
+  // visible to other collaborators — comment replies email-notify
+  // collaborators, deck creation/append shows up in Drive activity
+  // feeds — so dry-run + rate-limit coverage is required parity
+  // with Gmail send-side mutations.
+  "drive_reply_to_comment",
+  "slides_create_deck_from_outline",
+  "slides_append_to_deck",
 ]);
 
 /**

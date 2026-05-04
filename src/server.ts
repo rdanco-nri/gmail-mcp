@@ -12,7 +12,7 @@
  * registrations in `src/tools/*.ts`.
  */
 
-import type { gmail_v1 } from "googleapis";
+import type { gmail_v1, drive_v3, sheets_v4, slides_v1 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "./tools/index.js";
 import { listPrompts, getPrompt } from "./prompts.js";
@@ -37,6 +37,23 @@ export interface ServerOptions {
    * multi-account refactor can pass a different client per workspace.
    */
   gmail: gmail_v1.Gmail;
+  /**
+   * The Drive API client. Same auth, same OAuth2Client. Wired in v0.31
+   * to support the Drive tool family (search, read, comments).
+   */
+  drive: drive_v3.Drive;
+  /**
+   * The Sheets API client. Used by `drive_read_file` to enumerate
+   * tabs on multi-tab Sheets — Drive's `files.export(text/csv)` only
+   * returns the first/active tab, so we route through Sheets API for
+   * full coverage.
+   */
+  sheets: sheets_v4.Sheets;
+  /**
+   * The Slides API client. Used by `drive_read_file` (structured
+   * outline export of Slides decks) and the `slides_*` write tools.
+   */
+  slides: slides_v1.Slides;
   /**
    * The OAuth scopes the stored token actually carries. Tools whose
    * required scopes are NOT covered by this set (ANY-of-required
@@ -69,7 +86,13 @@ export function createServer(opts: ServerOptions): McpServer {
     },
   );
 
-  registerAllTools(server, opts.gmail, opts.authorizedScopes);
+  registerAllTools(server, {
+    gmail: opts.gmail,
+    drive: opts.drive,
+    sheets: opts.sheets,
+    slides: opts.slides,
+    authorizedScopes: opts.authorizedScopes,
+  });
 
   // Prompts surface — slash commands. Same handlers as the legacy
   // dispatcher, registered against the underlying low-level Server

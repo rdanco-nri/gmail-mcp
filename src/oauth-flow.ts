@@ -417,6 +417,18 @@ export async function authenticate(opts: AuthenticateOpts): Promise<void> {
         access_type: "offline",
         scope: scopeUrls,
         state: expectedState,
+        // Incremental authorization: when the user reauthenticates to
+        // add Drive/Slides/Docs scopes on top of an existing Gmail
+        // grant, Google merges the two consent records instead of
+        // forcing a full re-grant of the original Gmail scopes.
+        include_granted_scopes: true,
+        // Force the consent screen so Google ALWAYS issues a fresh
+        // refresh_token. Without this, Google omits the refresh
+        // token on subsequent consents (the "first consent only"
+        // refresh-token rule), and the credentials write below
+        // would persist `refresh_token: undefined`, silently
+        // breaking offline access on the next token expiry.
+        prompt: "consent",
       });
 
       log("Requesting scopes:", opts.scopes.join(", "));
@@ -507,11 +519,47 @@ export async function authenticate(opts: AuthenticateOpts): Promise<void> {
 
         try {
           const { tokens } = await opts.oauth2Client.getToken(code);
-          opts.oauth2Client.setCredentials(tokens);
+
+          // Refresh-token preservation guard. Even with `prompt:
+          // "consent"` set on the auth URL, certain OAuth client
+          // configurations (Web vs Installed, app verification
+          // status, prior grants) can produce token responses that
+          // omit `refresh_token`. If we wrote `tokens` straight
+          // through, the persisted credentials would lose the
+          // existing refresh token and the next access-token expiry
+          // would surface as `invalid_grant`. Belt-and-braces: read
+          // the existing credentials and carry the prior
+          // refresh_token forward when the new response lacks one.
+          let mergedTokens = tokens;
+          if (!tokens.refresh_token) {
+            try {
+              if (fs.existsSync(opts.credentialsPath)) {
+                const prior = readJsonBounded(opts.credentialsPath) as {
+                  tokens?: { refresh_token?: string };
+                  refresh_token?: string;
+                };
+                const priorRefresh = prior?.tokens?.refresh_token ?? prior?.refresh_token;
+                if (priorRefresh) {
+                  mergedTokens = { ...tokens, refresh_token: priorRefresh };
+                  log(
+                    "Reauth: token response omitted refresh_token; preserving existing refresh_token from credentials.json.",
+                  );
+                }
+              }
+            } catch (mergeErr) {
+              // Non-fatal — the auth flow itself succeeded; we just
+              // couldn't carry the prior refresh forward. Log and
+              // continue. The user can re-run `auth` if the lack of
+              // refresh token surfaces later as invalid_grant.
+              const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+              log(`Reauth: failed to merge prior refresh_token (continuing): ${msg}`);
+            }
+          }
+          opts.oauth2Client.setCredentials(mergedTokens);
 
           // writeFileSync's `mode` only applies on CREATE; force
           // `0o600` after to match `.github/SECURITY.md`.
-          const credentials = { tokens, scopes: opts.scopes };
+          const credentials = { tokens: mergedTokens, scopes: opts.scopes };
           fs.mkdirSync(path.dirname(opts.credentialsPath), { recursive: true, mode: 0o700 });
           fs.writeFileSync(opts.credentialsPath, JSON.stringify(credentials, null, 2), {
             mode: 0o600,

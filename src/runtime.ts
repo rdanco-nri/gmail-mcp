@@ -297,7 +297,16 @@ export async function runServer(opts: RunServerOpts): Promise<void> {
   });
 
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-  const server = createServer({ gmail, authorizedScopes });
+  // Drive / Sheets / Slides clients share the same OAuth2Client. Built
+  // once at boot (same lifecycle as `gmail`) so every Drive/Slides tool
+  // closes over a single client instance instead of re-instantiating
+  // per call. Sheets is needed for multi-tab CSV reads (Drive's
+  // files.export(text/csv) returns only the first tab — the Sheets
+  // API enumerates tabs and reads each one). See drive_read_file.
+  const drive = google.drive({ version: "v3", auth: oauth2Client });
+  const sheets = google.sheets({ version: "v4", auth: oauth2Client });
+  const slides = google.slides({ version: "v1", auth: oauth2Client });
+  const server = createServer({ gmail, drive, sheets, slides, authorizedScopes });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   /* v8 ignore stop */

@@ -1,17 +1,16 @@
 /**
  * Tool registrar barrel. Wires every per-domain registrar
  * (`messages`, `labels`, `filters`, `threads`, `downloads`,
- * `messaging`) into the supplied `McpServer`. Called by `createServer`
- * in `src/server.ts`.
+ * `messaging`, `drive`, `slides`) into the supplied `McpServer`.
+ * Called by `createServer` in `src/server.ts`.
  *
  * Once invoked, the SDK's `tools/list` auto-emit returns every
- * scope-eligible tool from the 26-tool surface. PR #7 of the v1.0.0
- * migration switched the entry point in `src/index.ts` to call
- * `createServer` directly, replacing the legacy `Server` +
- * `CallToolRequestSchema` switch dispatcher.
+ * scope-eligible tool. Drive + Slides registrars consume their own
+ * Google API clients (drive_v3, sheets_v4, slides_v1) injected
+ * alongside the gmail client.
  */
 
-import type { gmail_v1 } from "googleapis";
+import type { gmail_v1, drive_v3, sheets_v4, slides_v1 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessageTools } from "./messages.js";
 import { registerLabelTools } from "./labels.js";
@@ -19,16 +18,24 @@ import { registerFilterTools } from "./filters.js";
 import { registerThreadTools } from "./threads.js";
 import { registerDownloadTools } from "./downloads.js";
 import { registerMessagingTools } from "./messaging.js";
+import { registerDriveTools } from "./drive.js";
+import { registerSlidesTools } from "./slides.js";
 
-export function registerAllTools(
-  server: McpServer,
-  gmail: gmail_v1.Gmail,
-  authorizedScopes: readonly string[],
-): void {
-  registerMessageTools(server, gmail, authorizedScopes);
-  registerLabelTools(server, gmail, authorizedScopes);
-  registerFilterTools(server, gmail, authorizedScopes);
-  registerThreadTools(server, gmail, authorizedScopes);
-  registerDownloadTools(server, gmail, authorizedScopes);
-  registerMessagingTools(server, gmail, authorizedScopes);
+export interface RegisterAllToolsOpts {
+  gmail: gmail_v1.Gmail;
+  drive: drive_v3.Drive;
+  sheets: sheets_v4.Sheets;
+  slides: slides_v1.Slides;
+  authorizedScopes: readonly string[];
+}
+
+export function registerAllTools(server: McpServer, opts: RegisterAllToolsOpts): void {
+  registerMessageTools(server, opts.gmail, opts.authorizedScopes);
+  registerLabelTools(server, opts.gmail, opts.authorizedScopes);
+  registerFilterTools(server, opts.gmail, opts.authorizedScopes);
+  registerThreadTools(server, opts.gmail, opts.authorizedScopes);
+  registerDownloadTools(server, opts.gmail, opts.authorizedScopes);
+  registerMessagingTools(server, opts.gmail, opts.authorizedScopes);
+  registerDriveTools(server, opts.drive, opts.sheets, opts.slides, opts.authorizedScopes);
+  registerSlidesTools(server, opts.drive, opts.slides, opts.authorizedScopes);
 }
