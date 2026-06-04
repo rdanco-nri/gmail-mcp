@@ -102,6 +102,9 @@ export function registerThreadTools(
           bcc,
           subject,
           date,
+          listUnsubscribe: getH(headers, "list-unsubscribe") || null,
+          listId: getH(headers, "list-id") || null,
+          precedence: getH(headers, "precedence") || null,
           body,
           labelIds: msg.labelIds || [],
           attachments: attachments.map((a) => ({
@@ -284,6 +287,9 @@ export function registerThreadTools(
               bcc,
               subject,
               date,
+              listUnsubscribe: getH(headers, "list-unsubscribe") || null,
+              listId: getH(headers, "list-id") || null,
+              precedence: getH(headers, "precedence") || null,
               body,
               labelIds: msg.labelIds || [],
               attachments: attachments.map((a) => ({

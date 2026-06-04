@@ -160,6 +160,9 @@ interface MockGmailOpts {
         bodyText?: string;
         from?: string;
         subject?: string;
+        listUnsubscribe?: string;
+        listId?: string;
+        precedence?: string;
       }>;
     }
   >;
@@ -451,6 +454,11 @@ function mockGmail(opts: MockGmailOpts = {}): {
                       { name: "Subject", value: m.subject ?? `Msg ${m.id}` },
                       { name: "Date", value: "Fri, 25 Apr 2026 10:00:00 +0000" },
                       { name: "Message-ID", value: `<${m.id}@example.com>` },
+                      ...(m.listUnsubscribe
+                        ? [{ name: "List-Unsubscribe", value: m.listUnsubscribe }]
+                        : []),
+                      ...(m.listId ? [{ name: "List-Id", value: m.listId }] : []),
+                      ...(m.precedence ? [{ name: "Precedence", value: m.precedence }] : []),
                     ],
                     parts: [
                       {
@@ -1457,6 +1465,44 @@ describe("PR #6 registrars — get_thread + list_inbox_threads + get_inbox_with_
         expect(text).toContain("bob@example.com");
       },
       { threads: fixtureThreads },
+    );
+  });
+
+  it("get_thread surfaces List-Unsubscribe / List-Id / Precedence bulk signals (null when absent)", async () => {
+    await withFix(
+      ["gmail.readonly"],
+      async (fix) => {
+        const result = (await fix.client.callTool({
+          name: "get_thread",
+          arguments: { threadId: "thread_bulk" },
+        })) as { content: Array<{ type: string; text: string }> };
+        const text = result.content[0]?.text ?? "";
+        // Bulk-shaped message: all three signals surfaced verbatim.
+        expect(text).toContain('"listUnsubscribe": "<https://example.com/unsub>"');
+        expect(text).toContain('"listId": "news.example.com"');
+        expect(text).toContain('"precedence": "bulk"');
+        // Plain human message: signals null (header absent) — the skill's
+        // newsletter policy must NOT drop this.
+        expect(text).toContain('"listUnsubscribe": null');
+      },
+      {
+        threads: {
+          thread_bulk: {
+            messages: [
+              {
+                id: "mb1",
+                from: "news@example.com",
+                subject: "Weekly",
+                bodyText: "newsletter body",
+                listUnsubscribe: "<https://example.com/unsub>",
+                listId: "news.example.com",
+                precedence: "bulk",
+              },
+              { id: "mb2", from: "real@human.com", subject: "Re: lunch", bodyText: "human body" },
+            ],
+          },
+        },
+      },
     );
   });
 
