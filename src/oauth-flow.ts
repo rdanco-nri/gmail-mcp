@@ -271,6 +271,36 @@ export function loadCredentials(opts: LoadCredentialsOpts): LoadCredentialsResul
     const oauthCallbackUrl = opts.callbackArg ?? "http://localhost:3000/oauth2callback";
     const oauth2Client = new OAuth2Client(keys.client_id, keys.client_secret, oauthCallbackUrl);
 
+    // Persist refreshed tokens back to disk whenever google-auth-library
+    // silently refreshes the access_token mid-run. Without this handler,
+    // credentials.json mtime never advances and the access_token on disk
+    // stays at its initial (possibly expired) value across runs.
+    const credPath = opts.credentialsPath;
+    oauth2Client.on("tokens", (freshTokens) => {
+      try {
+        let current: Record<string, unknown> = {};
+        if (fs.existsSync(credPath)) {
+          current = JSON.parse(fs.readFileSync(credPath, "utf-8")) as Record<string, unknown>;
+        }
+        // Preserve credentials file structure: v1.2.0+ wraps under "tokens" key.
+        const storedTokens = (current.tokens ?? current) as Record<string, unknown>;
+        const merged: Record<string, unknown> = { ...storedTokens, ...freshTokens };
+        // refresh_token only present on initial consent; preserve existing if not provided.
+        if (!freshTokens.refresh_token && storedTokens.refresh_token) {
+          merged.refresh_token = storedTokens.refresh_token;
+        }
+        // Write back in whichever shape we found (wrapped or flat).
+        const output =
+          typeof current.tokens !== "undefined"
+            ? { ...current, tokens: merged }
+            : merged;
+        fs.writeFileSync(credPath, JSON.stringify(output, null, 2));
+        console.error("[oauth] persisted refreshed tokens to", credPath);
+      } catch (err) {
+        console.error("[oauth] failed to persist refreshed tokens:", err);
+      }
+    });
+
     let authorizedScopes: readonly string[] = DEFAULT_SCOPES;
 
     if (fs.existsSync(opts.credentialsPath)) {
