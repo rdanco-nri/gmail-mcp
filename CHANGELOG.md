@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-06-25
+
 ### Added
+
+- **Google Docs tab tools (v0.32)** — `docs_create_release_doc`, `docs_write_tab`, `docs_read_tab` (`src/tools/docs.ts`, backed by a new `docs_v1` client wired through `runtime` → `server` → `tools/index`). Create a pageless multi-tab Google Doc in a shared drive (named sidebar tabs via the Docs API `addDocumentTab`; default `Checklist` + `Draft`), populate a tab with a native table (two-pass: insert the empty table, GET it back, fill cells in descending index order so earlier indices stay valid) and/or a markdown narrative (`#`/`##` headings, `-` bullets, blank-line-separated paragraphs), and read one tab's content back as markdown via `documents.get(includeTabsContent=true)` — the per-tab read that `drive_read_file`'s flattened all-tabs export cannot do. The two write tools join `WRITE_TOOLS` (`src/middleware.ts`) and the `workspace_writes` `TOOL_BUCKET` (`src/rate-limit.ts`) for dry-run + rate-limit parity with the Slides/Drive write surface; `docs_read_tab` is read-only. Uses the (already-registered) `documents` scope.
 
 - **Drive + Slides + Sheets tool family (v0.31 in flight)** — extends the MCP surface beyond Gmail to read/search Google Drive, read/reply to comments, and create or append slide decks. Nine new tools across two registrars (`src/tools/drive.ts`, `src/tools/slides.ts`):
   - `drive_search` — `q=` syntax full-text + metadata search across My Drive and (by default) shared drives.

@@ -79,6 +79,10 @@ const TOOL_BUCKET: Record<string, string> = {
   drive_trash_file: "workspace_writes",
   slides_create_deck_from_outline: "workspace_writes",
   slides_append_to_deck: "workspace_writes",
+  // Docs writes (v0.32) — same bucket: doc creation + tab population
+  // are workspace mutations on a par with deck create/append.
+  docs_create_release_doc: "workspace_writes",
+  docs_write_tab: "workspace_writes",
 };
 
 interface BucketLimit {
