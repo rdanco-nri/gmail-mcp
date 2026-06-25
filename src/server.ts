@@ -12,7 +12,7 @@
  * registrations in `src/tools/*.ts`.
  */
 
-import type { gmail_v1, drive_v3, sheets_v4, slides_v1 } from "googleapis";
+import type { gmail_v1, drive_v3, sheets_v4, slides_v1, docs_v1 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "./tools/index.js";
 import { listPrompts, getPrompt } from "./prompts.js";
@@ -55,6 +55,12 @@ export interface ServerOptions {
    */
   slides: slides_v1.Slides;
   /**
+   * The Docs API client (v0.32). Backs the `docs_*` tools that create,
+   * populate, and read multi-tab release-notes docs. Required for
+   * per-tab content — Drive's files.export flattens all tabs.
+   */
+  docs: docs_v1.Docs;
+  /**
    * The OAuth scopes the stored token actually carries. Tools whose
    * required scopes are NOT covered by this set (ANY-of-required
    * match) are skipped at registration time — the equivalent of the
@@ -91,6 +97,7 @@ export function createServer(opts: ServerOptions): McpServer {
     drive: opts.drive,
     sheets: opts.sheets,
     slides: opts.slides,
+    docs: opts.docs,
     authorizedScopes: opts.authorizedScopes,
   });
 

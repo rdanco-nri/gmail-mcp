@@ -60,6 +60,12 @@ const WRITE_TOOLS = new Set<string>([
   "drive_trash_file",
   "slides_create_deck_from_outline",
   "slides_append_to_deck",
+  // Docs write tools (v0.32). docs_create_release_doc writes a new
+  // document to Drive; docs_write_tab mutates an existing doc visible
+  // to collaborators — same dry-run + rate-limit parity. docs_read_tab
+  // is read-only and intentionally absent.
+  "docs_create_release_doc",
+  "docs_write_tab",
 ]);
 
 /**

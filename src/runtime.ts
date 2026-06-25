@@ -306,7 +306,12 @@ export async function runServer(opts: RunServerOpts): Promise<void> {
   const drive = google.drive({ version: "v3", auth: oauth2Client });
   const sheets = google.sheets({ version: "v4", auth: oauth2Client });
   const slides = google.slides({ version: "v1", auth: oauth2Client });
-  const server = createServer({ gmail, drive, sheets, slides, authorizedScopes });
+  // Docs client (v0.32) — same OAuth2Client; backs the docs_* tools that
+  // create/populate/read multi-tab release-notes docs. Per-tab content
+  // (create/read tabs, write to a specific tabId) needs the Docs API;
+  // Drive's files.export cannot select a tab.
+  const docs = google.docs({ version: "v1", auth: oauth2Client });
+  const server = createServer({ gmail, drive, sheets, slides, docs, authorizedScopes });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   /* v8 ignore stop */

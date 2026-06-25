@@ -662,6 +662,71 @@ export const SlidesAppendToDeckSchema = z.object({
   ),
 });
 
+// Docs operations (v0.32) — multi-tab release-notes docs backed by docs_v1.
+// One row of a native Docs table; `cells` are the left-to-right cell values.
+export const DocsTableRowSchema = z.object({
+  cells: coerceArray(z.string().max(4000), { max: 30 }).describe(
+    "Ordered cell values for one table row, left to right.",
+  ),
+});
+
+export const DocsCreateReleaseDocSchema = z.object({
+  title: z
+    .string()
+    .min(1)
+    .max(255)
+    .describe("Doc title and Drive file name, e.g. '[draft] Release Notes 2026-06-25'."),
+  parentFolderId: DriveIdSchema.optional().describe(
+    "Drive folder or shared-drive ID to create the doc in. Defaults to My Drive root.",
+  ),
+  tabTitles: coerceArray(z.string().min(1).max(200), { max: 10 })
+    .optional()
+    .describe(
+      "Tab titles to create, in order. Defaults to ['Checklist','Draft']. The doc's default tab is renamed to the first title; remaining titles are added as new tabs.",
+    ),
+  pageless: z
+    .boolean()
+    .optional()
+    .describe("Set the document to pageless mode (best-effort). Defaults to true."),
+});
+
+export const DocsWriteTabSchema = z.object({
+  documentId: DriveIdSchema.describe("Target Google Doc ID."),
+  tabId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Target tab ID. If omitted, `tabTitle` is resolved to a tab ID; if both omitted, the first tab is used."),
+  tabTitle: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Target tab by title (resolved to a tab ID). Ignored when `tabId` is provided."),
+  mode: z
+    .enum(["replace", "append"])
+    .optional()
+    .describe("replace: clear the tab body before writing. append: add after existing content. Defaults to replace."),
+  table: coerceArray(DocsTableRowSchema, { max: 500 })
+    .optional()
+    .describe("Rows of a native Docs table to insert (the first row is the header). Use for the Checklist tab."),
+  markdown: z
+    .string()
+    .max(200000)
+    .optional()
+    .describe("Narrative text to insert: '# '/'## ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Use for the Draft tab."),
+});
+
+export const DocsReadTabSchema = z.object({
+  documentId: DriveIdSchema.describe("Target Google Doc ID."),
+  tabTitle: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe("Read only the tab with this exact title (e.g. 'Checklist'). If omitted, every tab is returned, each under its own heading."),
+});
+
 // Tool definition type
 export interface ToolAnnotations {
   title: string;
@@ -1238,6 +1303,55 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: SlidesAppendToDeckSchema,
     scopes: ["presentations"],
     annotations: { title: "Slides: Append To Deck", destructiveHint: false },
+  },
+
+  // =====================================================================
+  // Docs operations (v0.32) — multi-tab release-notes docs
+  // =====================================================================
+  {
+    name: "docs_create_release_doc",
+    description: [
+      "Create a new Google Doc with named tabs (the sidebar tabs, via the Docs API), optionally pageless, optionally placed in a shared drive. Defaults to two tabs: 'Checklist' and 'Draft'. **The new doc is written to Drive immediately.**",
+      "",
+      "USE WHEN: standing up a release-notes doc the team will review — one tab for the review checklist table, one for the narrative draft. Returns `documentId`, the resolved `{title, tabId}` for each tab, and a `webViewLink`. Populate the tabs afterward with `docs_write_tab`.",
+      "",
+      "DO NOT USE: to write content (use `docs_write_tab`) or to read a tab back (use `docs_read_tab`). Styling beyond pageless + headings/bullets/tables is out of scope.",
+      "",
+      "SIDE EFFECTS: writes a new document to Drive (My Drive root or `parentFolderId`). Persistent; counts toward Drive storage quota. Several API round-trips (create + get + batchUpdate to rename the default tab, add tabs, and set pageless). Requires both `documents` (Docs API) and `drive` (file creation / shared-drive placement) scopes.",
+    ].join("\n"),
+    schema: DocsCreateReleaseDocSchema,
+    scopes: ["documents"],
+    annotations: { title: "Docs: Create Release Doc", destructiveHint: false },
+  },
+  {
+    name: "docs_write_tab",
+    description: [
+      "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## ' headings, '- ' bullets, blank-line-separated paragraphs). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
+      "",
+      "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content.",
+      "",
+      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, and a plain table is out of scope.",
+      "",
+      "SIDE EFFECTS: persistent edits to the named tab, visible to collaborators. Table fills run a multi-pass batchUpdate (insert table, re-read cell indices, fill cells in descending index order). Requires the `documents` scope.",
+    ].join("\n"),
+    schema: DocsWriteTabSchema,
+    scopes: ["documents"],
+    annotations: { title: "Docs: Write Tab", destructiveHint: false },
+  },
+  {
+    name: "docs_read_tab",
+    description: [
+      "Read the content of one tab (or all tabs) of a Google Doc as markdown, using the Docs API with per-tab content. Paragraphs (with heading levels), bullets, and tables are serialized to markdown so the content can be parsed downstream. Read-only.",
+      "",
+      "USE WHEN: ingesting a reviewed tab back — e.g. reading the labeled 'Checklist' tab to recover the review table. `drive_read_file` flattens all tabs into one blob and cannot select a tab; this tool reads exactly the named tab.",
+      "",
+      "DO NOT USE: to read a non-tabbed Doc's whole body (use `drive_read_file`). Binary/exported formats are out of scope.",
+      "",
+      "SIDE EFFECTS: none — read-only. Requires the `documents` scope (`drive.readonly` is not sufficient for per-tab content).",
+    ].join("\n"),
+    schema: DocsReadTabSchema,
+    scopes: ["documents"],
+    annotations: { title: "Docs: Read Tab", readOnlyHint: true, destructiveHint: false },
   },
 
   // Forward operation

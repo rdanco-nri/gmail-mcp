@@ -10,7 +10,7 @@
  * alongside the gmail client.
  */
 
-import type { gmail_v1, drive_v3, sheets_v4, slides_v1 } from "googleapis";
+import type { gmail_v1, drive_v3, sheets_v4, slides_v1, docs_v1 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessageTools } from "./messages.js";
 import { registerLabelTools } from "./labels.js";
@@ -20,12 +20,14 @@ import { registerDownloadTools } from "./downloads.js";
 import { registerMessagingTools } from "./messaging.js";
 import { registerDriveTools } from "./drive.js";
 import { registerSlidesTools } from "./slides.js";
+import { registerDocsTools } from "./docs.js";
 
 export interface RegisterAllToolsOpts {
   gmail: gmail_v1.Gmail;
   drive: drive_v3.Drive;
   sheets: sheets_v4.Sheets;
   slides: slides_v1.Slides;
+  docs: docs_v1.Docs;
   authorizedScopes: readonly string[];
 }
 
@@ -38,4 +40,5 @@ export function registerAllTools(server: McpServer, opts: RegisterAllToolsOpts):
   registerMessagingTools(server, opts.gmail, opts.authorizedScopes);
   registerDriveTools(server, opts.drive, opts.sheets, opts.slides, opts.authorizedScopes);
   registerSlidesTools(server, opts.drive, opts.slides, opts.authorizedScopes);
+  registerDocsTools(server, opts.docs, opts.drive, opts.authorizedScopes);
 }
