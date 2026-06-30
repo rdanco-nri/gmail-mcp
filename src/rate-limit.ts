@@ -83,6 +83,9 @@ const TOOL_BUCKET: Record<string, string> = {
   // are workspace mutations on a par with deck create/append.
   docs_create_release_doc: "workspace_writes",
   docs_write_tab: "workspace_writes",
+  // Sheets write (v0.33) — full-tab overwrite, same bucket as the
+  // other workspace mutations above.
+  sheets_write_tab: "workspace_writes",
 };
 
 interface BucketLimit {

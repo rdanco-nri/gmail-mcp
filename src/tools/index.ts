@@ -21,6 +21,7 @@ import { registerMessagingTools } from "./messaging.js";
 import { registerDriveTools } from "./drive.js";
 import { registerSlidesTools } from "./slides.js";
 import { registerDocsTools } from "./docs.js";
+import { registerSheetsTools } from "./sheets.js";
 
 export interface RegisterAllToolsOpts {
   gmail: gmail_v1.Gmail;
@@ -41,4 +42,5 @@ export function registerAllTools(server: McpServer, opts: RegisterAllToolsOpts):
   registerDriveTools(server, opts.drive, opts.sheets, opts.slides, opts.authorizedScopes);
   registerSlidesTools(server, opts.drive, opts.slides, opts.authorizedScopes);
   registerDocsTools(server, opts.docs, opts.drive, opts.authorizedScopes);
+  registerSheetsTools(server, opts.sheets, opts.authorizedScopes);
 }

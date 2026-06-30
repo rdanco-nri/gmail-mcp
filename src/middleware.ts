@@ -66,6 +66,10 @@ const WRITE_TOOLS = new Set<string>([
   // is read-only and intentionally absent.
   "docs_create_release_doc",
   "docs_write_tab",
+  // Sheets write tool (v0.33). sheets_write_tab clears and rewrites an
+  // entire tab, visible to collaborators immediately — same dry-run +
+  // rate-limit parity as the other workspace writes above.
+  "sheets_write_tab",
 ]);
 
 /**

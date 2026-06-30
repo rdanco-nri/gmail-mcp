@@ -727,6 +727,28 @@ export const DocsReadTabSchema = z.object({
     .describe("Read only the tab with this exact title (e.g. 'Checklist'). If omitted, every tab is returned, each under its own heading."),
 });
 
+// Sheets operations (v0.33) — full-tab overwrite.
+export const SheetsWriteTabSchema = z.object({
+  fileId: DriveIdSchema.describe("Target Google Sheets spreadsheet ID."),
+  tabTitle: z
+    .string()
+    .min(1)
+    .max(200)
+    .describe(
+      "Exact title of an existing tab to overwrite. The tab must already exist — this tool does not create new tabs.",
+    ),
+  rows: coerceArray(coerceArray(z.string().max(50000), { max: 2000 }), { max: 5000 }).describe(
+    "Full replacement content for the tab: an ordered list of rows, each an ordered list of cell values (left to right). The entire existing tab is cleared first, then these rows are written starting at A1 with USER_ENTERED input (numbers/dates parse the same as a manual paste). This is a full overwrite, not a patch — there is no partial-range mode.",
+  ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "If true, returns the tab's current rows alongside the rows that would be written, without calling the Sheets write API. Use to preview the diff before committing. Independent of the global GMAIL_MCP_DRY_RUN env var, which only echoes back the call args without reading the live sheet.",
+    ),
+});
+
 // Tool definition type
 export interface ToolAnnotations {
   title: string;
@@ -1352,6 +1374,25 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: DocsReadTabSchema,
     scopes: ["documents"],
     annotations: { title: "Docs: Read Tab", readOnlyHint: true, destructiveHint: false },
+  },
+
+  // =====================================================================
+  // Sheets operations (v0.33) — full-tab overwrite
+  // =====================================================================
+  {
+    name: "sheets_write_tab",
+    description: [
+      "Overwrite the full contents of one tab in an existing Google Sheet. Clears the entire tab, then writes the given rows starting at A1 with USER_ENTERED semantics (same parsing as a manual paste). **Edits are written immediately and visible to every collaborator** unless `dryRun: true`.",
+      "",
+      "USE WHEN: pushing a fully-prepared replacement for a tab's contents — e.g. after editing a CSV/table externally and the complete new row set is ready. Call with `dryRun: true` first to see the tab's current rows alongside the rows that would be written, then call again with `dryRun: false` once confirmed.",
+      "",
+      "DO NOT USE: to create a new tab (the tab must already exist — call drive_read_file's `tabs` field or drive_get_metadata to confirm exact spelling first) or to patch a subset of cells (this tool always replaces the entire tab; there is no partial-range mode).",
+      "",
+      "SIDE EFFECTS: clears and rewrites the entire named tab. Not reversible through this MCP — recover via Google Sheets' built-in Version History (File > Version history) if needed. Requires the `spreadsheets` scope (full read-write; `spreadsheets.readonly` is rejected).",
+    ].join("\n"),
+    schema: SheetsWriteTabSchema,
+    scopes: ["spreadsheets"],
+    annotations: { title: "Sheets: Write Tab", destructiveHint: true, idempotentHint: true },
   },
 
   // Forward operation

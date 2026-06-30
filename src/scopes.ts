@@ -27,6 +27,9 @@
 //   - spreadsheets.readonly: Sheets API read. Required for multi-tab
 //     Sheets reads — Drive's files.export(text/csv) only returns the
 //     first/active tab.
+//   - spreadsheets: Sheets API read+write (added in v0.33). Required
+//     for sheets_write_tab. Superset of spreadsheets.readonly — a
+//     token holding this scope satisfies both.
 //   - presentations: Slides API read+write — needed to create or
 //     populate decks programmatically.
 //   - documents: Docs API read+write — pre-authorized for forward-
@@ -47,6 +50,7 @@ export const SCOPE_MAP: Record<string, string> = {
   "drive.readonly": "https://www.googleapis.com/auth/drive.readonly",
   "drive.file": "https://www.googleapis.com/auth/drive.file",
   "spreadsheets.readonly": "https://www.googleapis.com/auth/spreadsheets.readonly",
+  spreadsheets: "https://www.googleapis.com/auth/spreadsheets",
   presentations: "https://www.googleapis.com/auth/presentations",
   documents: "https://www.googleapis.com/auth/documents",
 };
