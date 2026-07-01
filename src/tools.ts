@@ -714,7 +714,7 @@ export const DocsWriteTabSchema = z.object({
     .string()
     .max(200000)
     .optional()
-    .describe("Narrative text to insert: '# '/'## ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Use for the Draft tab."),
+    .describe("Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab."),
 });
 
 export const DocsReadTabSchema = z.object({
@@ -1348,11 +1348,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "docs_write_tab",
     description: [
-      "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## ' headings, '- ' bullets, blank-line-separated paragraphs). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
+      "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## '/'### ' headings, '- ' bullets, blank-line-separated paragraphs, inline `**bold**` and `` `code` ``, and ``` fenced code blocks). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
       "",
       "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content.",
       "",
-      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, and a plain table is out of scope.",
+      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, inline bold/code, fenced code blocks, and a plain table is out of scope.",
       "",
       "SIDE EFFECTS: persistent edits to the named tab, visible to collaborators. Table fills run a multi-pass batchUpdate (insert table, re-read cell indices, fill cells in descending index order). Requires the `documents` scope.",
     ].join("\n"),
