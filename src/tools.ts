@@ -528,6 +528,12 @@ export const ForwardEmailSchema = z.object({
 // 33-44 chars).
 const DriveIdSchema = z.string().min(1).max(256);
 
+// "#rrggbb" only — the Docs API takes normalized rgb, so shorthand and named
+// colors are rejected here rather than guessed at.
+const HexColorSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/, "Must be a #rrggbb hex color, e.g. '#131166'.");
+
 export const DriveSearchSchema = z.object({
   query: z
     .string()
@@ -715,6 +721,37 @@ export const DocsWriteTabSchema = z.object({
     .max(200000)
     .optional()
     .describe("Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab."),
+  tableStyle: z
+    .object({
+      headerFill: HexColorSchema.optional().describe(
+        "Background fill for the header row (row 1), e.g. '#131166'.",
+      ),
+      headerTextColor: HexColorSchema.optional().describe(
+        "Text color for the header row, e.g. '#ffffff'. Applied per header cell.",
+      ),
+      headerBold: z
+        .boolean()
+        .optional()
+        .describe(
+          "Bold the header-row text. Defaults to true whenever headerFill or headerTextColor is set.",
+        ),
+      zebraFill: HexColorSchema.optional().describe(
+        "Background fill for every second data row (the 2nd, 4th, ... row below the header), producing alternating shading. The row directly under the header stays unfilled.",
+      ),
+      borderColor: HexColorSchema.optional().describe(
+        "Border color applied uniformly to every cell edge, e.g. '#ececee' for a hairline grid.",
+      ),
+      borderWidthPt: z
+        .number()
+        .min(0)
+        .max(5)
+        .optional()
+        .describe("Border width in points. Defaults to 0.5 when borderColor is set."),
+    })
+    .optional()
+    .describe(
+      "Styling for the inserted native table: header-row fill and text, alternating data-row shading, uniform cell borders. Only applied when `table` is present in the same call.",
+    ),
 });
 
 export const DocsReadTabSchema = z.object({
@@ -1464,9 +1501,9 @@ export const toolDefinitions: ToolDefinition[] = [
     description: [
       "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## '/'### ' headings, '- ' bullets, blank-line-separated paragraphs, inline `**bold**` and `` `code` ``, and ``` fenced code blocks). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
       "",
-      "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content.",
+      "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content. Pass `tableStyle` alongside `table` for a branded table: header-row fill + bold colored header text, alternating data-row shading, and uniform hairline borders (e.g. navy `#131166` header, `#f5f6f8` zebra, `#ececee` 0.5pt grid).",
       "",
-      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, inline bold/code, fenced code blocks, and a plain table is out of scope.",
+      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, inline bold/code, fenced code blocks, and the `tableStyle` table treatments is out of scope.",
       "",
       "SIDE EFFECTS: persistent edits to the named tab, visible to collaborators. Table fills run a multi-pass batchUpdate (insert table, re-read cell indices, fill cells in descending index order). Requires the `documents` scope.",
     ].join("\n"),

@@ -11,9 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.35.0] - 2026-07-28
+## [0.35.0] - 2026-08-06
 
 ### Added
+
+- **Docs table column widths** — `docs_write_tab` now sizes table columns content-proportionally (`src/tools/docs-table-widths.ts`, pure and unit-tested). The Docs API has no fit-to-content flag, so widths are estimated from cell text and applied as `FIXED_WIDTH` column properties; a sizing failure never aborts the write.
+
+- **Docs table styling** — `docs_write_tab` takes an optional `tableStyle`: header-row background fill, header text color and bold, alternating data-row shading (the 2nd, 4th, ... data row; the row under the header stays unfilled), and uniform per-edge cell borders with configurable width. Request building lives in `src/tools/docs-table-style.ts`, pure and unit-tested; styling runs on a fresh post-fill read so cell ranges are never stale. Every table also now gets one blank paragraph appended after it, so following content never sits cramped against the table's bottom border.
 
 - **Calendar tools (v0.35)** — `calendar_list_events` and `calendar_find_free_slots` (`src/tools/calendar.ts`, backed by a new `calendar_v3` client wired through `runtime` → `server` → `tools/index`). Both read-only; nothing in this MCP writes to Calendar. Two new scopes registered in `src/scopes.ts`: `calendar.readonly` (both tools) and `calendar.freebusy` (availability only, no event titles or attendees).
 

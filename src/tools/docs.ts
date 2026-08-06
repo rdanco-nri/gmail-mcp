@@ -36,6 +36,8 @@ import {
   DocsReadTabSchema,
 } from "../tools.js";
 import { asGmailApiError } from "../gmail-errors.js";
+import { estimateColWidthsPt } from "./docs-table-widths.js";
+import { buildTableStyleRequests, type HeaderCellRange } from "./docs-table-style.js";
 
 const DEFAULT_TAB_TITLES = ["Checklist", "Draft"];
 
@@ -511,7 +513,8 @@ export function registerDocsTools(
           const reread = await getDocWithTabs(docs, args.documentId);
           const tab = getTabById(reread, tabId);
           const tables = (tab?.documentTab?.body?.content ?? []).filter((el) => el.table);
-          const inserted = tables[tables.length - 1]?.table;
+          const insertedEl = tables[tables.length - 1];
+          const inserted = insertedEl?.table;
           if (!inserted) {
             return structuredError(
               "Inserted table could not be located on re-read; aborting cell fill.",
@@ -540,6 +543,100 @@ export function registerDocsTools(
                 requests: cellInserts.map((ci) => ({
                   insertText: { text: ci.text, location: { index: ci.index, tabId } },
                 })),
+              },
+            });
+          }
+          // Pass 3 — content-proportional fixed column widths (the Docs
+          // API has no fit-to-content flag; see docs-table-widths.ts).
+          // The table's startIndex is stable: the cell fills above all
+          // insert at indices inside (after) the table start. Best-effort:
+          // a width failure never aborts the write — the table is already
+          // filled, just evenly distributed.
+          const tableStart = insertedEl?.startIndex;
+          if (typeof tableStart === "number") {
+            const { widths } = estimateColWidthsPt(
+              args.table.map((r) => r.cells ?? []),
+              columns,
+            );
+            try {
+              await docs.documents.batchUpdate({
+                documentId: args.documentId,
+                requestBody: {
+                  requests: widths.map((w, c) => ({
+                    updateTableColumnProperties: {
+                      tableStartLocation: { index: tableStart, tabId },
+                      columnIndices: [c],
+                      tableColumnProperties: {
+                        widthType: "FIXED_WIDTH",
+                        width: { magnitude: w, unit: "PT" },
+                      },
+                      fields: "widthType,width",
+                    },
+                  })),
+                },
+              });
+            } catch {
+              // Column sizing is cosmetic; leave the evenly-distributed table.
+            }
+          }
+          // Pass 4 — optional table styling (header fill/text, zebra rows,
+          // uniform borders). Runs on a FRESH read: the cell fills above
+          // shifted every index, so ranges from the pass-2 read are stale.
+          if (args.tableStyle) {
+            const styledRead = await getDocWithTabs(docs, args.documentId);
+            const styledTab = getTabById(styledRead, tabId);
+            const styledTables = (styledTab?.documentTab?.body?.content ?? []).filter(
+              (el) => el.table,
+            );
+            const styledEl = styledTables[styledTables.length - 1];
+            const styledStart = styledEl?.startIndex;
+            const headerCells = styledEl?.table?.tableRows?.[0]?.tableCells ?? [];
+            const headerCellRanges: HeaderCellRange[] = headerCells.map((cell) => {
+              let start = Number.MAX_SAFE_INTEGER;
+              let end = 0;
+              for (const c of cell.content ?? []) {
+                if (typeof c.startIndex === "number") start = Math.min(start, c.startIndex);
+                if (typeof c.endIndex === "number") end = Math.max(end, c.endIndex);
+              }
+              return start < end
+                ? { startIndex: start, endIndex: end }
+                : { startIndex: 0, endIndex: 0 };
+            });
+            if (typeof styledStart === "number") {
+              const styleRequests = buildTableStyleRequests({
+                spec: args.tableStyle,
+                tableStart: styledStart,
+                tabId,
+                rows,
+                columns,
+                headerCellRanges,
+              });
+              if (styleRequests.length) {
+                await docs.documents.batchUpdate({
+                  documentId: args.documentId,
+                  requestBody: { requests: styleRequests },
+                });
+              }
+            }
+          }
+          // Pass 5 — always leave one blank paragraph after the table so
+          // whatever follows (an appended heading, more narrative) never
+          // sits cramped against the table's bottom border.
+          const afterRead = await getDocWithTabs(docs, args.documentId);
+          const afterTab = getTabById(afterRead, tabId);
+          if (afterTab) {
+            const end = tabBodyEndIndex(afterTab);
+            await docs.documents.batchUpdate({
+              documentId: args.documentId,
+              requestBody: {
+                requests: [
+                  {
+                    insertText: {
+                      text: "\n",
+                      location: { index: Math.max(1, end - 1), tabId },
+                    },
+                  },
+                ],
               },
             });
           }
