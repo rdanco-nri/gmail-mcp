@@ -158,6 +158,8 @@ See [llms-install.md](./llms-install.md) for an LLM-readable install guide.
 | `spreadsheets` | `…/auth/spreadsheets` | Sheets API read+write — required for `sheets_write_tab`. Superset of `spreadsheets.readonly`. |
 | `presentations` | `…/auth/presentations` | Slides API read+write — required for `slides_*` tools. |
 | `documents` | `…/auth/documents` | Docs API read+write — required for the `docs_*` tools. |
+| `calendar.readonly` | `…/auth/calendar.readonly` | Calendar read — required for `calendar_list_events`, and sufficient for `calendar_find_free_slots`. |
+| `calendar.freebusy` | `…/auth/calendar.freebusy` | freeBusy queries only (no event titles or attendees) — enables `calendar_find_free_slots` alone. Least-privilege option for availability lookups. |
 
 Recipes:
 
@@ -203,6 +205,15 @@ npx @klodr/gmail-mcp auth --scopes=gmail.modify,gmail.settings.basic,drive,sprea
 # so a short `--scopes` list here would silently de-list Gmail/Drive/
 # Slides/Docs tools even though Google still grants them.
 npx @klodr/gmail-mcp auth --scopes=gmail.modify,gmail.settings.basic,drive,spreadsheets,presentations,documents
+
+# Add Calendar read (v0.35) on top of the full grant above. Same
+# whole-list rule as the Sheets recipe: every scope you want to keep
+# must appear here. Enable the Google Calendar API in your Cloud
+# project first, or every calendar_* call returns 403 "API has not
+# been used in project ...". `calendar.readonly` covers both tools;
+# swap it for `calendar.freebusy` if you only want availability
+# lookups and no access to event titles.
+npx @klodr/gmail-mcp auth --scopes=gmail.modify,gmail.settings.basic,drive,spreadsheets,presentations,documents,calendar.readonly
 ```
 
 ## 🛡️ Safeguards
@@ -232,6 +243,8 @@ The exact set depends on the OAuth scopes granted at `auth` time. Full catalog:
 - **Slides (v0.31)** — `slides_create_deck_from_outline`, `slides_append_to_deck`. Both take a structured outline (title + bullets per slide) and use a three-phase create→get→insertText flow because Google's default theme inherits TITLE/BODY placeholders from the master rather than the layout, which breaks the canonical `placeholderIdMappings` pattern.
 - **Docs (v0.32)** — `docs_create_release_doc`, `docs_write_tab`, `docs_read_tab`. Create a pageless multi-tab Google Doc in a shared drive (named tabs via the Docs API), populate a tab with a native table and/or markdown narrative (two-pass cell fill for tables), and read one tab's content back as markdown via `documents.get(includeTabsContent=true)` — the per-tab read that `drive_read_file`'s flattened export cannot do.
 - **Sheets (v0.33, formatting pass v0.34)** — `sheets_write_tab`. Full-tab overwrite of an existing Google Sheets tab: clears the tab, then writes the given rows starting at A1 with `USER_ENTERED` semantics (same parsing as a manual paste). No partial-range patching and no tab creation — the tab must already exist. Pass `dryRun: true` to preview the tab's current rows alongside what would be written, without calling the write API. Requires the `spreadsheets` scope (full read-write). Formatting is handled automatically, default-on: explicit text wrapping on the written range, row heights auto-fit to the new content, and — if the new data has more columns than the tab previously had — the last existing header cell's style and column width are copied onto the new column(s). `values.clear`/`values.update` never touch formatting on their own, which is why this exists; a formatting failure degrades to a soft `formatWarning` in the response rather than failing the call (the values write already succeeded).
+
+- **Calendar (v0.35)** — `calendar_list_events`, `calendar_find_free_slots`. Both read-only; nothing here writes to Calendar. `calendar_list_events` returns what is actually scheduled (recurrences expanded, cancelled events dropped, attendees and conference links included) and needs full read access to the target calendar. `calendar_find_free_slots` answers "when are we all open": it runs a freeBusy query across any number of attendees, merges their busy blocks, subtracts them from working hours in a caller-supplied IANA zone, and returns the gaps at least `durationMinutes` long. The split exists because coworkers inside a Workspace domain usually share free/busy but not event details, so the availability tool keeps working where the event-listing tool 403s. A calendar that cannot be queried is reported in `calendarErrors` and excluded from the intersection, never counted as free — the one failure mode that would otherwise produce a confidently wrong answer.
 
 Every write tool is annotated with `destructiveHint` / `readOnlyHint` / `idempotentHint` per the MCP spec so policy-aware clients can gate on HITL confirmation.
 

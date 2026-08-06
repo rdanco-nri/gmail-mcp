@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-07-28
+
+### Added
+
+- **Calendar tools (v0.35)** — `calendar_list_events` and `calendar_find_free_slots` (`src/tools/calendar.ts`, backed by a new `calendar_v3` client wired through `runtime` → `server` → `tools/index`). Both read-only; nothing in this MCP writes to Calendar. Two new scopes registered in `src/scopes.ts`: `calendar.readonly` (both tools) and `calendar.freebusy` (availability only, no event titles or attendees).
+
+  `calendar_list_events` lists what is scheduled on one calendar over a window, with recurring events expanded (`singleEvents: true` + `orderBy: startTime`) and cancelled events dropped, returning attendees, response statuses, and conference links.
+
+  `calendar_find_free_slots` answers the cross-person question: it runs `freebusy.query` over any number of attendees, merges their busy blocks, subtracts them from working hours in a caller-supplied IANA zone, and returns the remaining gaps at least `durationMinutes` long. The two tools are deliberately split by access level — inside a Workspace domain coworkers typically share free/busy but not event details, so availability lookups keep working on calendars whose events return 403/404.
+
+  A calendar that cannot be queried is surfaced in `calendarErrors`, excluded from the intersection, and flagged `partial: true` with a `WARNING` line in the text channel; it is never silently treated as free. When no requested calendar is readable the call errors rather than returning fabricated availability.
+
+  A 403 is triaged before it reaches the caller. Google returns the same status for "this Cloud project has the Calendar API switched off" and "this token lacks the scope", and the remedies do not overlap; the handlers branch on Google's `has not been used in project` / `is disabled` wording so a disabled-API failure is never reported as a missing scope. Caught live: a token freshly granted `calendar.readonly` still 403s until the API is enabled in the console, and the original single-message handler would have sent the reader back to re-run `auth` indefinitely.
+
+  Working-hours arithmetic is zone-aware without a date library: `Intl.DateTimeFormat` reads the wall time an instant shows in a zone, and a two-pass fixpoint inverts that to turn a wall time back into an instant. Verified across a DST boundary (9am local holds on both sides of the 2026-11-01 fall-back). The pure helpers are exported and covered by `src/tools/calendar.test.ts` (29 tests: interval math, zone conversion, slot computation, tool registration per scope, and the partial-failure paths).
+
 ## [0.32.0] - 2026-06-25
 
 ### Added

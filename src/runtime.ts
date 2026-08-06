@@ -311,7 +311,12 @@ export async function runServer(opts: RunServerOpts): Promise<void> {
   // (create/read tabs, write to a specific tabId) needs the Docs API;
   // Drive's files.export cannot select a tab.
   const docs = google.docs({ version: "v1", auth: oauth2Client });
-  const server = createServer({ gmail, drive, sheets, slides, docs, authorizedScopes });
+  // Calendar client (v0.35) — same OAuth2Client; backs the read-only
+  // calendar_* tools. Built unconditionally: the calendar scopes are a
+  // separate grant, and `defineTool`'s scope filter is what keeps the
+  // tools off `tools/list` for tokens that never authorized them.
+  const calendar = google.calendar({ version: "v3", auth: oauth2Client });
+  const server = createServer({ gmail, drive, sheets, slides, docs, calendar, authorizedScopes });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   /* v8 ignore stop */

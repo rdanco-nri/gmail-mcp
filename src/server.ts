@@ -12,7 +12,7 @@
  * registrations in `src/tools/*.ts`.
  */
 
-import type { gmail_v1, drive_v3, sheets_v4, slides_v1, docs_v1 } from "googleapis";
+import type { gmail_v1, drive_v3, sheets_v4, slides_v1, docs_v1, calendar_v3 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAllTools } from "./tools/index.js";
 import { listPrompts, getPrompt } from "./prompts.js";
@@ -26,7 +26,7 @@ import {
 // `npm version patch|minor|major`. Mirrors the same convention used in
 // klodr/mercury-invoicing-mcp/src/server.ts:VERSION and
 // klodr/faxdrop-mcp/src/server.ts:VERSION.
-export const VERSION = "0.34.0";
+export const VERSION = "0.35.0";
 
 export interface ServerOptions {
   /**
@@ -60,6 +60,14 @@ export interface ServerOptions {
    * per-tab content — Drive's files.export flattens all tabs.
    */
   docs: docs_v1.Docs;
+  /**
+   * The Calendar API client (v0.35). Backs the read-only `calendar_*`
+   * tools: event listing and cross-attendee availability. Same
+   * OAuth2Client as everything else; the calendar scopes are separate
+   * grants, so these tools de-list themselves on a token that predates
+   * them rather than failing at call time.
+   */
+  calendar: calendar_v3.Calendar;
   /**
    * The OAuth scopes the stored token actually carries. Tools whose
    * required scopes are NOT covered by this set (ANY-of-required
@@ -98,6 +106,7 @@ export function createServer(opts: ServerOptions): McpServer {
     sheets: opts.sheets,
     slides: opts.slides,
     docs: opts.docs,
+    calendar: opts.calendar,
     authorizedScopes: opts.authorizedScopes,
   });
 

@@ -749,6 +749,120 @@ export const SheetsWriteTabSchema = z.object({
     ),
 });
 
+// Calendar operations (v0.35) — read-only event listing + availability.
+//
+// `timeMin`/`timeMax` are RFC3339 instants (what the Calendar API takes
+// directly). Callers routinely have only a date in hand, so a bare
+// `YYYY-MM-DD` is accepted and widened to that day's UTC bounds by the
+// registrar — rejecting it would push date math onto the caller for no
+// gain.
+const Rfc3339OrDateSchema = z
+  .string()
+  .min(8)
+  .max(40)
+  .regex(
+    /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/,
+    "Must be a date (2026-07-29) or an RFC3339 instant (2026-07-29T09:00:00-07:00).",
+  );
+
+// IANA zone names are the contract for every wall-clock field below.
+// Validated against the runtime's own tz database rather than a regex,
+// so a typo ("America/Los_Angles") fails at parse time with a clear
+// message instead of silently shifting every returned slot.
+const TimeZoneSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine((tz) => {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Unknown IANA time zone (expected e.g. 'America/Los_Angeles').");
+
+// Calendar IDs are email addresses (a person's calendar), the literal
+// "primary" (the authenticated account's own), or a long generated
+// @group.calendar.google.com address. Bounded like the other ID types.
+const CalendarIdSchema = z.string().min(1).max(320);
+
+export const CalendarListEventsSchema = z.object({
+  calendarId: CalendarIdSchema.default("primary").describe(
+    "Whose calendar to read: 'primary' (the authenticated account, the default) or a calendar ID / email address the account has at least read access to.",
+  ),
+  timeMin: Rfc3339OrDateSchema.describe(
+    "Start of the window (inclusive). A bare date is treated as 00:00:00Z that day.",
+  ),
+  timeMax: Rfc3339OrDateSchema.describe(
+    "End of the window (exclusive). A bare date is treated as 00:00:00Z that day, so pass the day AFTER the last one you want.",
+  ),
+  query: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Free-text filter over event summary, description, location, and attendees."),
+  maxResults: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(250)
+    .default(50)
+    .describe("Maximum events to return (1-250, default 50)."),
+  timeZone: TimeZoneSchema.optional().describe(
+    "IANA zone used to render the human-readable times in the response. Defaults to the calendar's own zone.",
+  ),
+});
+
+export const CalendarFindFreeSlotsSchema = z.object({
+  attendees: coerceArray(CalendarIdSchema, { max: 50 })
+    .optional()
+    .describe(
+      "Calendar IDs / email addresses to intersect availability across (max 50). Defaults to ['primary'] — just the authenticated account. Add coworkers to find a time that works for everyone. IMPORTANT: a calendar this account cannot see is reported in `calendarErrors` and EXCLUDED from the intersection, never silently treated as free — always check that field before trusting the slots.",
+    ),
+  timeMin: Rfc3339OrDateSchema.describe(
+    "Start of the search window (inclusive). A bare date is treated as 00:00:00 in `timeZone`.",
+  ),
+  timeMax: Rfc3339OrDateSchema.describe(
+    "End of the search window (exclusive). A bare date is treated as 00:00:00 in `timeZone`.",
+  ),
+  durationMinutes: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(1440)
+    .default(30)
+    .describe("Minimum contiguous free block to qualify as a slot (default 30)."),
+  timeZone: TimeZoneSchema.default("America/Los_Angeles").describe(
+    "IANA zone that `workdayStartHour`/`workdayEndHour` and the returned labels are expressed in.",
+  ),
+  workdayStartHour: z.coerce
+    .number()
+    .min(0)
+    .max(23)
+    .default(9)
+    .describe("Earliest hour of the day to offer, in `timeZone` (default 9 = 9am)."),
+  workdayEndHour: z.coerce
+    .number()
+    .min(1)
+    .max(24)
+    .default(17)
+    .describe(
+      "Latest hour of the day to offer, in `timeZone` (default 17 = 5pm). Must exceed workdayStartHour.",
+    ),
+  includeWeekends: z
+    .boolean()
+    .default(false)
+    .describe("Include Saturday and Sunday (default false)."),
+  maxSlots: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(20)
+    .describe("Cap on returned slots, earliest first (default 20)."),
+});
+
 // Tool definition type
 export interface ToolAnnotations {
   title: string;
@@ -1395,6 +1509,42 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: SheetsWriteTabSchema,
     scopes: ["spreadsheets"],
     annotations: { title: "Sheets: Write Tab", destructiveHint: true, idempotentHint: true },
+  },
+
+  // =====================================================================
+  // Calendar operations (v0.35) — read-only
+  // =====================================================================
+  {
+    name: "calendar_list_events",
+    description: [
+      "List events on one calendar over a time window, with recurring events expanded into their individual occurrences and sorted earliest first.",
+      "",
+      "USE WHEN: answering what is actually ON someone's calendar — reviewing the day/week, finding a specific meeting, checking who is attending, or pulling a conference link.",
+      "",
+      "DO NOT USE: to find an open time (use `calendar_find_free_slots`, which intersects multiple calendars and subtracts busy blocks). Reading a coworker's event TITLES needs full read access to their calendar, which is rarer than free/busy sharing — if this returns 404/403 for them, their availability is still reachable via `calendar_find_free_slots`.",
+      "",
+      "SIDE EFFECTS: none — read-only. Requires the `calendar.readonly` scope. Cancelled events are omitted.",
+    ].join("\n"),
+    schema: CalendarListEventsSchema,
+    scopes: ["calendar.readonly"],
+    annotations: { title: "Calendar: List Events", readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "calendar_find_free_slots",
+    description: [
+      "Find open meeting slots across one or more calendars. Queries Google's freeBusy API for every listed attendee, merges their busy blocks, subtracts them from working hours, and returns the contiguous gaps at least `durationMinutes` long, earliest first.",
+      "",
+      "USE WHEN: answering 'when am I free?' or 'when can we all meet?' — proposing times to an external party, scheduling with coworkers, or checking a specific window before committing to it.",
+      "",
+      "DO NOT USE: to see what the conflicting meetings actually ARE (use `calendar_list_events`). This tool never returns event titles — freeBusy exposes only opaque busy intervals, which is exactly why it works against coworkers who share only free/busy.",
+      "",
+      "PARTIAL RESULTS: any calendar the account cannot query comes back in `calendarErrors` and is EXCLUDED from the intersection rather than counted as free. When that array is non-empty the slots are valid only for the calendars in `calendarsQueried` — say so before proposing the times to anyone.",
+      "",
+      "SIDE EFFECTS: none — read-only, and it books nothing. Requires `calendar.freebusy` or `calendar.readonly`. All-day and out-of-office events count as busy.",
+    ].join("\n"),
+    schema: CalendarFindFreeSlotsSchema,
+    scopes: ["calendar.freebusy", "calendar.readonly"],
+    annotations: { title: "Calendar: Find Free Slots", readOnlyHint: true, destructiveHint: false },
   },
 
   // Forward operation
