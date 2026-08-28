@@ -116,4 +116,35 @@ describe("estimateColWidthsPt", () => {
     const b = estimateColWidthsPt(rows, 7);
     expect(a).toEqual(b);
   });
+
+  it("does not let one outlier cell own a column", () => {
+    const desc = "A sentence of ordinary prose that should keep a comfortable width ".repeat(5);
+    const refs = Array.from({ length: 27 }, (_, i) => `NP-${10000 + i}`).join(", ");
+    const rows = [
+      ["#", "Description", "Sources"],
+      ["1", desc, refs],
+      ["2", desc, "PR #1, NP-2"],
+      ["3", desc, "PR #3, NP-4, NP-5"],
+      ["4", desc, "PR #6"],
+    ];
+    const { widths } = estimateColWidthsPt(rows, 3);
+    // Description carries the bulk of every row; Sources has one long cell.
+    expect(widths[1]).toBeGreaterThan(widths[2]);
+  });
+
+  it("keeps every column at or above its floor even when the floors exceed the cap", () => {
+    const heads = ["#", "Confidence", "PR / Ticket", "Title", "Description", "Owners", "Status", "Gate", "Inventory source", "Action"];
+    const body = ["C10", "high", "PR #1757, NP-9578", "Enhanced Scheduled Tasks", "prose ".repeat(40), "Zach", "released v1.7", "feature-flagged: scheduledTaskView", "keyword-pass, body-undocumented", ""];
+    const rows = [heads, ...Array.from({ length: 12 }, () => body)];
+    const { widths } = estimateColWidthsPt(rows, 10);
+    const floorOf = (col: number) =>
+      Math.max(
+        ...rows.map((r) => Math.max(...r[col]!.split(/\s+/).map((w) => w.length * 6.2))),
+        Math.max(...heads[col]!.split(/\s+/).map((w) => w.length * 7.0)),
+      ) + PAD;
+    for (let c = 0; c < 10; c++) {
+      if (c === 9) continue; // fill-in column has its own reserved width
+      expect(widths[c]).toBeGreaterThanOrEqual(Math.floor(Math.min(120 + PAD, floorOf(c))));
+    }
+  });
 });

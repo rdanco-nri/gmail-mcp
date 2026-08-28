@@ -554,10 +554,15 @@ export function registerDocsTools(
           // filled, just evenly distributed.
           const tableStart = insertedEl?.startIndex;
           if (typeof tableStart === "number") {
-            const { widths } = estimateColWidthsPt(
-              args.table.map((r) => r.cells ?? []),
-              columns,
-            );
+            // An explicit columnWidths (one pt value per column) wins over
+            // the estimate; a length mismatch falls back to the estimate.
+            const widths =
+              args.columnWidths && args.columnWidths.length === columns
+                ? args.columnWidths
+                : estimateColWidthsPt(
+                    args.table.map((r) => r.cells ?? []),
+                    columns,
+                  ).widths;
             try {
               await docs.documents.batchUpdate({
                 documentId: args.documentId,

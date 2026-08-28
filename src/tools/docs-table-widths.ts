@@ -44,6 +44,10 @@ const SNAP_MARGIN = 1.3; // snap up to a cell edge only if within 30%
 // columns (From/Age on new items) are empty from sourcing, not by
 // construction, and should stay narrow.
 const EMPTY_FILL_PT = 100;
+// Percentile of cell widths that sets a column's target (see robustMax).
+const ROBUST_PCT = 0.8;
+// Hard floor ceiling used only in the last-resort scale (see below).
+const FLOOR_HARD_PT = 120;
 
 function cellLines(text: string): string[] {
   const lines = text.split("\n").map((s) => s.trim());
@@ -84,12 +88,18 @@ export function estimateColWidthsPt(
     fillIn[i] = rows.length > 1 && bodyEmpty && i === colCount - 1;
     const source = cells.length ? cells : ["x"];
     const widths = [...new Set(source.map(cellPt))].sort((a, b) => b - a);
+    // Target width comes from a high percentile of the cells, not the
+    // single widest one: one outlier cell (a Sources cell listing 27
+    // references) must wrap deeper on its own instead of owning the
+    // column and squeezing every other column to its floor.
+    const ascending = source.map(cellPt).sort((a, b) => a - b);
+    const robustMax = ascending[Math.max(0, Math.ceil(ascending.length * ROBUST_PCT) - 1)]!;
     let floor = Math.max(...source.map((c) => longestWordPt(c)));
     // Bold header words must fit on one line, whatever the body holds.
     const header = rows[0]?.[i];
     if (header) floor = Math.max(floor, longestWordPt(header, HEADER_CHAR_PT));
     floor = Math.min(MAX_TEXT_PT, Math.max(MIN_TEXT_PT, floor));
-    cols.push({ widths, max: widths[0]!, floor });
+    cols.push({ widths, max: Math.max(robustMax, floor), floor });
   }
   // Fill-in columns: raise both floor and target so the reserved width
   // survives the compression loop (floor is never compressed below).
@@ -139,9 +149,19 @@ export function estimateColWidthsPt(
   }
 
   if (total() > TOTAL_CAP_PT) {
-    // Last resort: everything already at floor; scale proportionally.
-    const scale = TOTAL_CAP_PT / total();
-    const scaled = w.map((x) => Math.max(MIN_TEXT_PT + PAD, x * scale));
+    // Last resort: scale only the slack ABOVE each column's floor. A
+    // floor is the longest unbreakable token (plus the bold header word);
+    // scaling below it wraps mid-word ("C1|0", "Confiden|ce"). When the
+    // floors alone exceed the cap, the table is allowed to be wider than
+    // the cap: a pageless doc scrolls, a broken word never reads.
+    // A floor above FLOOR_HARD_PT comes from a single very long token (an
+    // env var, a URL); Docs breaks those mid-token anyway, so do not let
+    // one of them force a 400pt column on a ten-column table.
+    const floors = cols.map((c) => Math.min(c.floor, FLOOR_HARD_PT) + PAD);
+    const floorTotal = floors.reduce((a, b) => a + b, 0);
+    const slackTotal = w.reduce((a, x, i) => a + Math.max(0, x - floors[i]!), 0);
+    const keep = slackTotal > 0 ? Math.max(0, (TOTAL_CAP_PT - floorTotal) / slackTotal) : 0;
+    const scaled = w.map((x, i) => floors[i]! + Math.max(0, x - floors[i]!) * Math.min(1, keep));
     const out = scaled.map((x) => Math.round(x));
     return { widths: out, total: out.reduce((a, b) => a + b, 0) };
   }
@@ -155,6 +175,7 @@ export function estimateColWidthsPt(
     for (let i = 0; i < colCount; i++) {
       const ascending = [...cols[i]!.widths].sort((a, b) => a - b);
       for (const cw of ascending) {
+        if (cw > cols[i]!.max) break; // never buy an outlier cell's width
         const cand = Math.min(MAX_TEXT_PT, cw) + PAD;
         const cost = cand - w[i]!;
         if (cost > 0 && cost <= slack && (best === null || cost < best.cost)) {

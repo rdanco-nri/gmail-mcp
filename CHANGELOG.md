@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docs table column widths no longer follow one outlier cell.** `estimateColWidthsPt` set a column's target from its single widest cell, so a Sources cell listing 27 references made that column ~600pt and squeezed Description to a word per line. The target is now the 80th-percentile cell width and the slack-reclaim pass never buys a width above it; an outlier cell wraps deeper on its own.
+- **Column floors survive the total cap.** The last-resort proportional scale ignored each column's longest-token floor, so ten-column tables rendered `C1|0` and `Confiden|ce`. Scaling now applies only to the slack above the floor (hard floor capped at 120pt; Docs breaks longer tokens itself), and the table is allowed to exceed the cap rather than break a word.
+
+### Added
+
+- **`columnWidths` on `docs_write_tab`** — optional fixed widths in points, one per column, overriding the estimate. Ignored on a length mismatch.
+
 ## [0.35.0] - 2026-08-06
 
 ### Added

@@ -721,6 +721,13 @@ export const DocsWriteTabSchema = z.object({
     .max(200000)
     .optional()
     .describe("Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab."),
+  columnWidths: z
+    .array(z.number().min(24).max(600))
+    .max(30)
+    .optional()
+    .describe(
+      "Fixed column widths in points, one per table column, left to right (e.g. [36, 150, 340, ...]). Overrides the content-proportional estimate. Ignored when the length does not match the table's column count. Only applied when `table` is present in the same call.",
+    ),
   tableStyle: z
     .object({
       headerFill: HexColorSchema.optional().describe(
@@ -1501,7 +1508,7 @@ export const toolDefinitions: ToolDefinition[] = [
     description: [
       "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## '/'### ' headings, '- ' bullets, blank-line-separated paragraphs, inline `**bold**` and `` `code` ``, and ``` fenced code blocks). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
       "",
-      "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content. Pass `tableStyle` alongside `table` for a branded table: header-row fill + bold colored header text, alternating data-row shading, and uniform hairline borders (e.g. navy `#131166` header, `#f5f6f8` zebra, `#ececee` 0.5pt grid).",
+      "USE WHEN: populating the Checklist tab with the review table (`table`) or the Draft tab with the narrative (`markdown`). `mode: replace` (default) clears the tab body first; `mode: append` adds after existing content. Pass `columnWidths` (pt per column) to fix the layout instead of the content-proportional estimate. Pass `tableStyle` alongside `table` for a branded table: header-row fill + bold colored header text, alternating data-row shading, and uniform hairline borders (e.g. navy `#131166` header, `#f5f6f8` zebra, `#ececee` 0.5pt grid).",
       "",
       "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, inline bold/code, fenced code blocks, and the `tableStyle` table treatments is out of scope.",
       "",
