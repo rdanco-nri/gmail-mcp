@@ -18,6 +18,7 @@ import { registerFilterTools } from "./filters.js";
 import { registerThreadTools } from "./threads.js";
 import { registerDownloadTools } from "./downloads.js";
 import { registerMessagingTools } from "./messaging.js";
+import { registerDraftTools } from "./drafts.js";
 import { registerDriveTools } from "./drive.js";
 import { registerSlidesTools } from "./slides.js";
 import { registerDocsTools } from "./docs.js";
@@ -41,6 +42,7 @@ export function registerAllTools(server: McpServer, opts: RegisterAllToolsOpts):
   registerThreadTools(server, opts.gmail, opts.authorizedScopes);
   registerDownloadTools(server, opts.gmail, opts.authorizedScopes);
   registerMessagingTools(server, opts.gmail, opts.authorizedScopes);
+  registerDraftTools(server, opts.gmail, opts.authorizedScopes);
   registerDriveTools(server, opts.drive, opts.sheets, opts.slides, opts.authorizedScopes);
   registerSlidesTools(server, opts.drive, opts.slides, opts.authorizedScopes);
   registerDocsTools(server, opts.docs, opts.drive, opts.authorizedScopes);
