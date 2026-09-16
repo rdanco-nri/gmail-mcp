@@ -10,8 +10,12 @@
  *   - drive_list_shared_drives
  *   - drive_list_comments   (comments.list with inline replies)
  *   - drive_reply_to_comment (replies.create — full `drive` scope only)
+ *   - drive_trash_file      (files.update trashed=true)
+ *   - drive_upload_file     (files.create / files.update with multipart media,
+ *                            convert-on-upload to Slides / Docs / Sheets;
+ *                            source path jailed to the attachment or download dir)
  *
- * All seven flow through `defineTool()` for free middleware
+ * All of them flow through `defineTool()` for free middleware
  * (audit, rate-limit, sanitize, dry-run, scope-filter).
  *
  * Sheets API is used for multi-tab CSV reads — Drive's
@@ -21,7 +25,9 @@
  * `text/plain` export, which loses slide structure entirely).
  */
 
+import fs from "fs";
 import path from "path";
+import { Readable } from "stream";
 import type { drive_v3, sheets_v4, slides_v1 } from "googleapis";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { defineTool, pullToolMeta as pull } from "./_shared.js";
@@ -34,12 +40,14 @@ import {
   DriveListCommentsSchema,
   DriveReplyToCommentSchema,
   DriveTrashFileSchema,
+  DriveUploadFileSchema,
 } from "../tools.js";
 import {
   resolveDownloadSavePath,
   getDownloadDir,
   safeWriteFile,
   sanitizeAttachmentFilename,
+  assertReadablePathInJail,
 } from "../utl.js";
 import { asGmailApiError } from "../gmail-errors.js";
 
@@ -48,6 +56,31 @@ const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const PRES_MIME = "application/vnd.google-apps.presentation";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
+
+// Upload: source mime by extension, and the Google-native type Drive
+// converts it to when `convert` is on. Only Office/CSV kinds Drive's
+// importer handles are listed; anything else with convert=true is an
+// error rather than a silent raw upload.
+const UPLOAD_SOURCE_MIME: Record<string, string> = {
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".csv": "text/csv",
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
+const UPLOAD_CONVERT_TARGET: Record<string, string> = {
+  ".pptx": PRES_MIME,
+  ".docx": DOC_MIME,
+  ".xlsx": SHEET_MIME,
+  ".csv": SHEET_MIME,
+};
+// Drive's multipart upload (what googleapis sends when `media` is set)
+// accepts at most 5 MB. Resumable upload for larger files is not
+// implemented; refuse early with a clear message instead of a 413.
+export const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 // Workspace types we explicitly do NOT have a useful text export for.
 // Better to fail loud than silently dump an empty binary in the jail.
@@ -147,9 +180,7 @@ interface SlideOutlineExtract {
   speakerNotes: string;
 }
 
-function extractSlideOutline(
-  presentation: slides_v1.Schema$Presentation,
-): SlideOutlineExtract[] {
+function extractSlideOutline(presentation: slides_v1.Schema$Presentation): SlideOutlineExtract[] {
   const out: SlideOutlineExtract[] = [];
   const slides = presentation.slides ?? [];
   for (let i = 0; i < slides.length; i++) {
@@ -548,6 +579,105 @@ export function registerDriveTools(
     authorizedScopes,
   );
 
+  // ---- drive_upload_file ----
+  const upMeta = pull("drive_upload_file");
+  defineTool(
+    server,
+    "drive_upload_file",
+    upMeta.description,
+    DriveUploadFileSchema.shape,
+    async (args) => {
+      // Everything before the API call is local validation; those errors
+      // are returned as structured errors with the message unchanged.
+      let resolved: string;
+      try {
+        resolved = assertReadablePathInJail(args.path, { jails: ["attachment", "download"] });
+      } catch (err) {
+        return structuredError(err instanceof Error ? err.message : String(err));
+      }
+      if (args.replaceFileId && args.parentFolderId) {
+        return structuredError(
+          "replaceFileId and parentFolderId cannot be combined: a replaced file keeps its current folder.",
+        );
+      }
+      const size = fs.statSync(resolved).size;
+      if (size > UPLOAD_MAX_BYTES) {
+        return structuredError(
+          `File is ${size} bytes, over the ${UPLOAD_MAX_BYTES}-byte (5 MB) multipart upload cap. Resumable upload is not implemented; shrink the file (fewer or smaller images) or upload it by hand.`,
+        );
+      }
+      const ext = path.extname(resolved).toLowerCase();
+      const sourceMime = UPLOAD_SOURCE_MIME[ext] ?? "application/octet-stream";
+      const targetMime = args.convert ? UPLOAD_CONVERT_TARGET[ext] : undefined;
+      if (args.convert && !targetMime) {
+        return structuredError(
+          `convert=true has no Google-native target for "${ext || "(no extension)"}". Supported: .pptx → Slides, .docx → Docs, .xlsx/.csv → Sheets. Pass convert=false to upload the bytes as they are.`,
+        );
+      }
+      const converted = Boolean(targetMime);
+      const baseName = path.basename(resolved);
+      const name =
+        args.name ?? (converted ? baseName.slice(0, baseName.length - ext.length) : baseName);
+      try {
+        // The file is at most UPLOAD_MAX_BYTES, so it is read whole and
+        // wrapped as a stream. A lazily opened fs.createReadStream would
+        // leak its descriptor when the API rejects before consuming it.
+        const media = { mimeType: sourceMime, body: Readable.from(fs.readFileSync(resolved)) };
+        const fields = "id,name,mimeType,webViewLink,parents";
+        const res = args.replaceFileId
+          ? await drive.files.update({
+              fileId: args.replaceFileId,
+              requestBody: targetMime ? { mimeType: targetMime } : {},
+              media,
+              fields,
+              supportsAllDrives: true,
+            })
+          : await drive.files.create({
+              requestBody: {
+                name,
+                mimeType: targetMime,
+                parents: args.parentFolderId ? [args.parentFolderId] : undefined,
+              },
+              media,
+              fields,
+              supportsAllDrives: true,
+            });
+        const result = {
+          status: args.replaceFileId ? ("replaced" as const) : ("uploaded" as const),
+          fileId: res.data.id ?? args.replaceFileId ?? null,
+          name: res.data.name ?? name,
+          mimeType: res.data.mimeType ?? null,
+          webViewLink: res.data.webViewLink ?? null,
+          parents: res.data.parents ?? null,
+          converted,
+          sourcePath: resolved,
+          size,
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${args.replaceFileId ? "Replaced" : "Uploaded"} ${result.name}${converted ? ` (converted to ${result.mimeType ?? targetMime})` : ""}.\nDrive id: ${result.fileId}\nOpen: ${result.webViewLink ?? "(no link returned)"}`,
+            },
+          ],
+          structuredContent: result,
+        };
+      } catch (err) {
+        const { code, message } = asGmailApiError(err);
+        if (code === 404) return structuredError(`File or folder not found: ${message}`);
+        if (code === 403) return structuredError(`Insufficient permissions to upload: ${message}`);
+        const prefix =
+          code !== undefined
+            ? `drive_upload_file failed (HTTP ${code})`
+            : "drive_upload_file failed";
+        return structuredError(`${prefix}: ${message}`);
+      }
+    },
+    upMeta.annotations,
+    upMeta.scopes,
+    authorizedScopes,
+  );
+
   // ---- drive_list_shared_drives ----
   const sdMeta = pull("drive_list_shared_drives");
   defineTool(
@@ -674,9 +804,7 @@ export function registerDriveTools(
         if (code === 403)
           return structuredError(`Insufficient permissions to trash this file: ${message}`);
         const prefix =
-          code !== undefined
-            ? `drive_trash_file failed (HTTP ${code})`
-            : "drive_trash_file failed";
+          code !== undefined ? `drive_trash_file failed (HTTP ${code})` : "drive_trash_file failed";
         return structuredError(`${prefix}: ${message}`);
       }
     },
@@ -719,9 +847,7 @@ export function registerDriveTools(
         const { code, message } = asGmailApiError(err);
         if (code === 404) return structuredError(`File or comment not found: ${message}`);
         if (code === 403)
-          return structuredError(
-            `Insufficient permissions to reply on this file: ${message}`,
-          );
+          return structuredError(`Insufficient permissions to reply on this file: ${message}`);
         const prefix =
           code !== undefined
             ? `drive_reply_to_comment failed (HTTP ${code})`

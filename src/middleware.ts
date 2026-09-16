@@ -61,6 +61,9 @@ const WRITE_TOOLS = new Set<string>([
   // with Gmail send-side mutations.
   "drive_reply_to_comment",
   "drive_trash_file",
+  // drive_upload_file (v0.36) creates or overwrites a Drive file from a
+  // local one; same dry-run + rate-limit parity as the writes above.
+  "drive_upload_file",
   "slides_create_deck_from_outline",
   "slides_append_to_deck",
   // Docs write tools (v0.32). docs_create_release_doc writes a new

@@ -66,17 +66,73 @@ export function resetJailDirCache(): void {
 function assertInsideJail(
   resolved: string,
   jail: string,
-  opts: { envVar: string; kind: "attachment" | "savePath"; original: string },
+  opts: { envVar: string; kind: "attachment" | "savePath" | "upload"; original: string },
 ): void {
   if (resolved === jail || resolved.startsWith(jail + path.sep)) return;
-  const label = opts.kind === "attachment" ? "Attachment path" : "savePath";
-  const jailLabel = opts.kind === "attachment" ? "directory" : "download directory";
+  const label =
+    opts.kind === "attachment"
+      ? "Attachment path"
+      : opts.kind === "upload"
+        ? "Upload path"
+        : "savePath";
+  const jailLabel = opts.kind === "savePath" ? "download directory" : "directory";
   throw new Error(
     `${label} is outside the allowed ${jailLabel}. ` +
       `Got: ${resolved} (resolved from ${opts.original}). ` +
       `Allowed: ${jail}. ` +
       `Override with ${opts.envVar}=/abs/path if you need a different jail.`,
   );
+}
+
+/**
+ * Validate that a local file the server is asked to READ sits inside one
+ * of the named jails, after realpath canonicalization. Returns the
+ * realpath-resolved path so the caller reads the canonical target, not
+ * the original possibly-symlink string (same TOCTOU reasoning as
+ * `assertAttachmentPathAllowed`, which is now a one-jail call to this).
+ *
+ * `jails` lists which roots may serve as the source: the attachment jail
+ * (files we are willing to send outward) and/or the download jail (files
+ * an earlier tool call wrote, e.g. a deck pulled down with
+ * `drive_download_file` and re-uploaded after a local edit). The error
+ * names every allowed root and its env var.
+ */
+export function assertReadablePathInJail(
+  filePath: string,
+  opts: { jails: ("attachment" | "download")[]; kind?: "attachment" | "upload" },
+): string {
+  const kind = opts.kind ?? "upload";
+  const roots = opts.jails.map((j) =>
+    j === "attachment"
+      ? { dir: getAttachmentDir(), envVar: ENV_ATTACHMENT_DIR }
+      : { dir: getDownloadDir(), envVar: ENV_DOWNLOAD_DIR },
+  );
+  const label = kind === "attachment" ? "Attachment path" : "Upload path";
+  if (!path.isAbsolute(filePath)) {
+    throw new Error(
+      `${label} must be absolute: "${filePath}". ` +
+        `Place files inside ${roots.map((r) => `${r.dir} (or set ${r.envVar})`).join(" or ")} and use the absolute path.`,
+    );
+  }
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File does not exist: ${filePath}`);
+  }
+  const resolved = fs.realpathSync(filePath);
+  const only = roots.length === 1 ? roots[0] : undefined;
+  if (only) {
+    assertInsideJail(resolved, only.dir, { envVar: only.envVar, kind, original: filePath });
+    return resolved;
+  }
+  const inside = roots.some((r) => resolved === r.dir || resolved.startsWith(r.dir + path.sep));
+  if (!inside) {
+    throw new Error(
+      `${label} is outside every allowed directory. ` +
+        `Got: ${resolved} (resolved from ${filePath}). ` +
+        `Allowed: ${roots.map((r) => `${r.dir} (${r.envVar})`).join(", ")}. ` +
+        `Move the file into one of them, or set the env var to a different jail.`,
+    );
+  }
+  return resolved;
 }
 
 /**
@@ -209,22 +265,7 @@ export function resolveDownloadSavePath(savePath: string): string {
  * and the actual read at send time.
  */
 function assertAttachmentPathAllowed(filePath: string): string {
-  if (!path.isAbsolute(filePath)) {
-    throw new Error(
-      `Attachment path must be absolute: "${filePath}". ` +
-        `Place files inside ${getAttachmentDir()} (or set ${ENV_ATTACHMENT_DIR}) and use the absolute path.`,
-    );
-  }
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`File does not exist: ${filePath}`);
-  }
-  const resolved = fs.realpathSync(filePath);
-  assertInsideJail(resolved, getAttachmentDir(), {
-    envVar: ENV_ATTACHMENT_DIR,
-    kind: "attachment",
-    original: filePath,
-  });
-  return resolved;
+  return assertReadablePathInJail(filePath, { jails: ["attachment"], kind: "attachment" });
 }
 
 /**
