@@ -696,7 +696,9 @@ export const DriveListCommentsSchema = z.object({
   pageSize: coerceInt({ min: 1, max: 100 })
     .optional()
     .default(50)
-    .describe("Max comments per page (1-100, default 50). Replies are inline-expanded per comment."),
+    .describe(
+      "Max comments per page (1-100, default 50). Replies are inline-expanded per comment.",
+    ),
   pageToken: z.string().optional().describe("Continuation token."),
 });
 
@@ -710,17 +712,43 @@ export const DriveTrashFileSchema = z.object({
   fileId: DriveIdSchema.describe("Drive file ID to move to Trash."),
 });
 
+export const DriveUploadFileSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe(
+      "Absolute local path of the file to upload. Must sit inside GMAIL_MCP_ATTACHMENT_DIR (default ~/GmailAttachments) or GMAIL_MCP_DOWNLOAD_DIR (default ~/GmailDownloads); any other location is refused before any API call.",
+    ),
+  name: z
+    .string()
+    .min(1)
+    .max(255)
+    .optional()
+    .describe(
+      "Drive file name. Defaults to the local basename; when converting, the extension is dropped (a Google Slides file is not called 'deck.pptx').",
+    ),
+  parentFolderId: DriveIdSchema.optional().describe(
+    "Optional Drive folder ID to create the file in. Defaults to My Drive root. Not allowed together with replaceFileId.",
+  ),
+  convert: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      "Convert to the Google-native type on upload (default true): .pptx → Google Slides, .docx → Google Docs, .xlsx/.csv → Google Sheets. Any other extension with convert=true is an error. Set false to store the bytes as they are.",
+    ),
+  replaceFileId: DriveIdSchema.optional().describe(
+    "Existing Drive file ID whose content this upload replaces (files.update with media), keeping its ID, URL, and sharing. Omit to create a new file.",
+  ),
+});
+
 // Slides outline shape — one slide.
 export const SlideOutlineSchema = z.object({
   title: z.string().max(500).describe("Slide title (rendered in the TITLE placeholder)."),
   bullets: coerceArray(z.string().max(2000), { max: 50 })
     .optional()
     .describe("Bullet points for the BODY placeholder. Optional. Each entry becomes one bullet."),
-  speakerNotes: z
-    .string()
-    .max(20000)
-    .optional()
-    .describe("Optional speaker notes for the slide."),
+  speakerNotes: z.string().max(20000).optional().describe("Optional speaker notes for the slide."),
 });
 
 export const SlidesCreateDeckFromOutlineSchema = z.object({
@@ -774,7 +802,9 @@ export const DocsWriteTabSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Target tab ID. If omitted, `tabTitle` is resolved to a tab ID; if both omitted, the first tab is used."),
+    .describe(
+      "Target tab ID. If omitted, `tabTitle` is resolved to a tab ID; if both omitted, the first tab is used.",
+    ),
   tabTitle: z
     .string()
     .min(1)
@@ -784,15 +814,21 @@ export const DocsWriteTabSchema = z.object({
   mode: z
     .enum(["replace", "append"])
     .optional()
-    .describe("replace: clear the tab body before writing. append: add after existing content. Defaults to replace."),
+    .describe(
+      "replace: clear the tab body before writing. append: add after existing content. Defaults to replace.",
+    ),
   table: coerceArray(DocsTableRowSchema, { max: 500 })
     .optional()
-    .describe("Rows of a native Docs table to insert (the first row is the header). Use for the Checklist tab."),
+    .describe(
+      "Rows of a native Docs table to insert (the first row is the header). Use for the Checklist tab.",
+    ),
   markdown: z
     .string()
     .max(200000)
     .optional()
-    .describe("Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab."),
+    .describe(
+      "Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab.",
+    ),
   columnWidths: z
     .array(z.number().min(24).max(600))
     .max(30)
@@ -840,7 +876,9 @@ export const DocsReadTabSchema = z.object({
     .min(1)
     .max(200)
     .optional()
-    .describe("Read only the tab with this exact title (e.g. 'Checklist'). If omitted, every tab is returned, each under its own heading."),
+    .describe(
+      "Read only the tab with this exact title (e.g. 'Checklist'). If omitted, every tab is returned, each under its own heading.",
+    ),
 });
 
 // Sheets operations (v0.33) — full-tab overwrite.
@@ -1596,6 +1634,21 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: DriveTrashFileSchema,
     scopes: ["drive"],
     annotations: { title: "Drive: Trash File", destructiveHint: true, idempotentHint: true },
+  },
+  {
+    name: "drive_upload_file",
+    description: [
+      "Upload a local file to Google Drive, by default converting it to the Google-native type on the way in (.pptx → Slides, .docx → Docs, .xlsx/.csv → Sheets). **The file is created in Drive immediately.**",
+      "",
+      "USE WHEN: a deck, doc, or sheet was built locally (e.g. a python-pptx deck on the Newton template) and must exist as a Google Slides / Docs / Sheets file with its theme, layouts, and formatting intact. Conversion happens once, at upload, by Drive's own importer — the same one the Slides UI uses for 'Import slides'. With `replaceFileId`, the upload overwrites that file's content in place so its URL and sharing survive; whether Drive re-converts an Office file onto an existing native file is not guaranteed — check the result's mimeType.",
+      "",
+      "DO NOT USE: for files outside GMAIL_MCP_ATTACHMENT_DIR / GMAIL_MCP_DOWNLOAD_DIR (refused before any API call — copy the file into one of those jails first). Files over 5 MB are refused (multipart upload cap; resumable upload is not implemented). To create a deck from a text outline with no local file, use `slides_create_deck_from_outline`.",
+      "",
+      "SIDE EFFECTS: one `files.create` (or `files.update` with `replaceFileId`) with multipart media. A new file counts toward Drive storage; a converted file is Google-native and cannot be downloaded raw afterwards (use `drive_read_file`). Requires the `drive` scope.",
+    ].join("\n"),
+    schema: DriveUploadFileSchema,
+    scopes: ["drive"],
+    annotations: { title: "Drive: Upload File", destructiveHint: true, idempotentHint: false },
   },
   {
     name: "drive_reply_to_comment",
