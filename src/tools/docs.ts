@@ -1,12 +1,15 @@
 /**
  * Docs tool registrars (v0.32).
  *
- * Three tools backed by docs_v1 (and drive_v3 for file placement):
+ * Four tools backed by docs_v1 (and drive_v3 for file placement):
  *   - docs_create_release_doc  (documents.create + batchUpdate: rename
  *                               default tab, addDocumentTab, set pageless)
  *   - docs_write_tab           (batchUpdate into a specific tabId — a
  *                               native table and/or markdown narrative)
  *   - docs_read_tab            (documents.get?includeTabsContent → markdown)
+ *   - docs_locate_comments     (files.export text/html + comments.list →
+ *                               each open thread with its tab, heading,
+ *                               and table row; see doc-comment-locations.ts)
  *
  * Implementation notes (honest complexity):
  *
@@ -34,8 +37,12 @@ import {
   DocsCreateReleaseDocSchema,
   DocsWriteTabSchema,
   DocsReadTabSchema,
+  DocsLocateCommentsSchema,
+  DocsLocateCommentsOutputShape,
 } from "../tools.js";
 import { asGmailApiError } from "../gmail-errors.js";
+import { locateComments } from "../doc-comment-locations.js";
+import { DOC_MIME, getResolvedFileMeta } from "./drive.js";
 import { estimateColWidthsPt } from "./docs-table-widths.js";
 import { buildTableStyleRequests, type HeaderCellRange } from "./docs-table-style.js";
 
@@ -830,5 +837,159 @@ export function registerDocsTools(
     readMeta.annotations,
     readMeta.scopes,
     authorizedScopes,
+  );
+
+  // ---- docs_locate_comments ----
+  const locateMeta = pull("docs_locate_comments");
+  defineTool(
+    server,
+    "docs_locate_comments",
+    locateMeta.description,
+    DocsLocateCommentsSchema.shape,
+    async (args) => {
+      try {
+        const { meta, resolvedId } = await getResolvedFileMeta(
+          drive,
+          args.documentId,
+          "id,name,mimeType,modifiedTime,shortcutDetails",
+          true,
+        );
+        if (meta.mimeType !== DOC_MIME) {
+          return structuredError(
+            `"${meta.name ?? resolvedId}" is ${meta.mimeType ?? "an unknown type"}, not a Google Doc. docs_locate_comments reads Google Docs only; use drive_list_comments for comments on other file types.`,
+          );
+        }
+
+        const [html, comments, tabTitles] = await Promise.all([
+          exportDocHtml(drive, resolvedId),
+          listAllComments(drive, resolvedId),
+          listTabTitles(docs, resolvedId),
+        ]);
+
+        let tab: string | undefined;
+        if (args.tabTitle) {
+          if (tabTitles === null) {
+            return structuredError(
+              "Cannot filter by tab: the Doc's tab titles could not be read. Call again without `tabTitle`.",
+            );
+          }
+          tab = resolveTitle(tabTitles, args.tabTitle);
+          if (!tab) {
+            return structuredError(
+              `No tab titled "${args.tabTitle}" found. Available tabs: ${tabTitles.join(", ")}.`,
+            );
+          }
+        }
+
+        const result = locateComments(
+          {
+            fileId: resolvedId,
+            name: meta.name ?? resolvedId,
+            modifiedTime: meta.modifiedTime ?? null,
+            html,
+            tabTitles,
+            threads: comments.threads,
+            commentsTruncated: comments.truncated,
+          },
+          {
+            tab,
+            mentions: args.mentions,
+            includeResolved: args.includeResolved,
+            includeFullRow: args.includeFullRow,
+            includeReplies: args.includeReplies,
+            maxCellChars: args.maxCellChars,
+            maxCommentChars: args.maxCommentChars,
+            maxTotalChars: LOCATE_MAX_TOTAL_CHARS,
+          },
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
+      } catch (err) {
+        const { code, message } = asGmailApiError(err);
+        if (code === 403 && /exportSizeLimitExceeded/i.test(message)) {
+          return structuredError(
+            `exportSizeLimitExceeded: the Doc's HTML export is over Drive's 10 MB cap, so comment positions are unavailable. Use drive_list_comments for the comments without positions.`,
+          );
+        }
+        if (code === 404) return structuredError(`Document not found: ${message}`);
+        if (code === 403)
+          return structuredError(`Insufficient permissions to read this document: ${message}`);
+        const prefix =
+          code !== undefined
+            ? `docs_locate_comments failed (HTTP ${code})`
+            : "docs_locate_comments failed";
+        return structuredError(`${prefix}: ${message}`);
+      }
+    },
+    locateMeta.annotations,
+    locateMeta.scopes,
+    authorizedScopes,
+    DocsLocateCommentsOutputShape,
+  );
+}
+
+// docs_locate_comments: the serialized result stays under this many
+// characters so it returns inline instead of overflowing the caller.
+const LOCATE_MAX_TOTAL_CHARS = 80_000;
+const COMMENT_PAGE_CAP = 20;
+const COMMENT_FIELDS =
+  "comments(id,author(displayName,me),content,createdTime,modifiedTime,resolved,deleted,assigneeEmailAddress,mentionedEmailAddresses,quotedFileContent,replies(id,author(displayName,me),content,createdTime,modifiedTime,deleted,action,assigneeEmailAddress,mentionedEmailAddresses)),nextPageToken";
+
+async function exportDocHtml(drive: drive_v3.Drive, fileId: string): Promise<string> {
+  const resp = await drive.files.export(
+    { fileId, mimeType: "text/html" },
+    { responseType: "text" },
+  );
+  if (typeof resp.data !== "string") throw new Error("HTML export did not return text");
+  return resp.data;
+}
+
+async function listAllComments(
+  drive: drive_v3.Drive,
+  fileId: string,
+): Promise<{ threads: drive_v3.Schema$Comment[]; truncated: boolean }> {
+  const threads: drive_v3.Schema$Comment[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < COMMENT_PAGE_CAP; page++) {
+    const resp = await drive.comments.list({
+      fileId,
+      pageSize: 100,
+      pageToken,
+      includeDeleted: false,
+      fields: COMMENT_FIELDS,
+    });
+    threads.push(...(resp.data.comments ?? []));
+    pageToken = resp.data.nextPageToken ?? undefined;
+    if (!pageToken) return { threads, truncated: false };
+  }
+  return { threads, truncated: true };
+}
+
+// Tab titles in order (tab properties only, no content), or null when the
+// Docs API refuses — positions still resolve, only the tab is unknown.
+async function listTabTitles(docs: docs_v1.Docs, documentId: string): Promise<string[] | null> {
+  try {
+    const resp = await docs.documents.get({
+      documentId,
+      includeTabsContent: true,
+      fields:
+        "tabs(tabProperties(title),childTabs(tabProperties(title),childTabs(tabProperties(title))))",
+    });
+    return flattenTabs(resp.data.tabs).map((t) => t.tabProperties?.title ?? "");
+  } catch {
+    return null;
+  }
+}
+
+// Same order as resolveTabByTitle: exact, case-insensitive, prefix; last match wins.
+function resolveTitle(titles: readonly string[], wanted: string): string | undefined {
+  const lower = wanted.toLowerCase();
+  const pick = (ok: (t: string) => boolean) => titles.filter(ok).at(-1);
+  return (
+    pick((t) => t === wanted) ??
+    pick((t) => t.toLowerCase() === lower) ??
+    pick((t) => t.toLowerCase().startsWith(lower))
   );
 }
