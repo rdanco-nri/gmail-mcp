@@ -120,18 +120,32 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
   const tabsSeen: string[] = [];
 
   let skipDepth = 0; // inside <head>/<style>/<script>
-  let tab: string | null = null;
+
+  // A single-tab Doc may carry no title paragraph, so its one tab holds
+  // everything from the start.
+  let tab: string | null = tabTitles.length === 1 ? (tabTitles[0] ?? null) : null;
   let nextTab = 0;
+  if (tab !== null) tabsSeen.push(tab);
   const headings: string[] = [];
   const headingPath = () => headings.filter((h) => h);
 
-  // Heading or tab-title paragraph being collected.
+  // Heading or tab-title paragraph being collected, and markers inside it.
   let headingLevel = 0;
   let titleDepth = 0;
   let collect: string | null = null;
+  let headingMarkers: ExportMarker[] = [];
 
-  // Tables nest; each open table tracks its current row and cell.
-  const tableStack: { table: ExportTable; cell: string | null }[] = [];
+  // Tables nest. Each open table tracks its current cell's text and grid
+  // column, and the cells a rowspan carries into later rows.
+  interface OpenTable {
+    table: ExportTable;
+    cell: string | null;
+    cellCol: number;
+    colSpan: number;
+    rowSpan: number;
+    carry: ({ left: number; text: string } | undefined)[];
+  }
+  const tableStack: OpenTable[] = [];
 
   // Top-level paragraph text, for markers outside tables.
   let blockDepth = 0;
@@ -154,6 +168,16 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
   };
 
   const appendBreak = () => appendText(" ");
+
+  const saveBody = () => {
+    if (bodyN === null) return;
+    if (bodyPara) bodyParas.push(bodyPara);
+    bodies.set(bodyN, classifyBody(bodyN, bodyParas));
+    bodyN = null;
+    bodyPara = null;
+  };
+
+  const spanOf = (v: string | undefined) => Math.max(1, Number.parseInt(v ?? "1", 10) || 1);
 
   const parser = new Parser(
     {
@@ -180,17 +204,18 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
               kind: top ? "table_cell" : "paragraph",
             };
             if (top) {
-              const rows = top.table.rows;
               m.tableIndex = top.table.index;
-              m.rowIndex = rows.length - 1;
-              m.colIndex = rows[rows.length - 1]?.length ?? 0;
+              m.rowIndex = top.table.rows.length - 1;
+              m.colIndex = top.cellCol;
             } else {
               blockMarkers.push(m);
             }
+            if (headingLevel && collect !== null) headingMarkers.push(m);
             markers.push(m);
             return;
           }
           if (body?.[1]) {
+            if (bodyN !== null) saveBody();
             anchor = "body";
             bodyN = Number(body[1]);
             bodyDivDepth = divDepth;
@@ -214,18 +239,38 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
         }
 
         if (name === "table") {
-          tableStack.push({
-            table: { index: tables.length, tab, headingPath: headingPath(), rows: [] },
-            cell: null,
-          });
-          tables.push(tableStack[tableStack.length - 1]!.table);
+          const table: ExportTable = {
+            index: tables.length,
+            tab,
+            headingPath: headingPath(),
+            rows: [],
+          };
+          tableStack.push({ table, cell: null, cellCol: 0, colSpan: 1, rowSpan: 1, carry: [] });
+          tables.push(table);
           return;
         }
         const top = tableStack[tableStack.length - 1];
         if (top) {
-          if (name === "tr") top.table.rows.push([]);
-          else if (name === "td" || name === "th") top.cell = "";
-          else if (BLOCK_TAGS.has(name)) appendBreak();
+          if (name === "tr") {
+            // Cells a rowspan carries down fill their columns first.
+            const row: string[] = [];
+            top.carry.forEach((c, i) => {
+              if (!c) return;
+              row[i] = c.text;
+              top.carry[i] = c.left > 1 ? { left: c.left - 1, text: c.text } : undefined;
+            });
+            top.table.rows.push(row);
+          } else if (name === "td" || name === "th") {
+            const row = top.table.rows[top.table.rows.length - 1] ?? [];
+            let col = 0;
+            while (row[col] !== undefined) col++;
+            top.cellCol = col;
+            top.colSpan = spanOf(attribs.colspan);
+            top.rowSpan = spanOf(attribs.rowspan);
+            top.cell = "";
+          } else if (BLOCK_TAGS.has(name)) {
+            appendBreak();
+          }
           return;
         }
         if (name === "p" || name === "li" || HEADING_LEVEL[name]) {
@@ -266,12 +311,7 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
           }
           if (name === "div") {
             divDepth--;
-            if (divDepth < bodyDivDepth) {
-              if (bodyPara) bodyParas.push(bodyPara);
-              bodies.set(bodyN, classifyBody(bodyN, bodyParas));
-              bodyN = null;
-              bodyPara = null;
-            }
+            if (divDepth < bodyDivDepth) saveBody();
           }
           return;
         }
@@ -280,13 +320,16 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
         if (HEADING_LEVEL[name] && headingLevel === HEADING_LEVEL[name] && collect !== null) {
           headings.length = headingLevel - 1;
           headings[headingLevel - 1] = normalizeText(collect);
+          // A comment on the heading itself belongs under that heading.
+          for (const m of headingMarkers) m.headingPath = headingPath();
+          headingMarkers = [];
           headingLevel = 0;
           collect = null;
         } else if (name === "p" && titleDepth && collect !== null) {
           const title = normalizeText(collect);
           if (title && title === tabTitles[nextTab]) {
             tab = title;
-            tabsSeen.push(title);
+            if (!tabsSeen.includes(title)) tabsSeen.push(title);
             nextTab++;
             headings.length = 0;
           }
@@ -301,9 +344,20 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
             return;
           }
           if ((name === "td" || name === "th") && top.cell !== null) {
+            // A merged cell fills every grid column it covers, and a rowspan
+            // carries its text into the rows below.
             const row = top.table.rows[top.table.rows.length - 1];
-            row?.push(normalizeText(top.cell));
+            const text = normalizeText(top.cell);
+            for (let k = 0; k < top.colSpan; k++) {
+              const col = top.cellCol + k;
+              if (row) row[col] = text;
+              if (top.rowSpan > 1) top.carry[col] = { left: top.rowSpan - 1, text };
+            }
             top.cell = null;
+          }
+          if (name === "tr") {
+            const row = top.table.rows[top.table.rows.length - 1];
+            if (row) for (let i = 0; i < row.length; i++) row[i] ??= "";
           }
           return;
         }
@@ -321,7 +375,7 @@ export function parseExportMarkers(html: string, tabTitles: readonly string[] = 
   );
   parser.write(html);
   parser.end();
-  if (bodyN !== null) bodies.set(bodyN, classifyBody(bodyN, bodyParas));
+  saveBody();
 
   return { markers, tables, bodies, tabsSeen };
 }
@@ -377,25 +431,28 @@ function replyMatches(reply: ApiReply, body: ExportBody | undefined): boolean {
  * the most of the thread's replies wins; a tie is ambiguous and claims
  * nothing. Threads with more replies are placed first, so a longer thread
  * cannot lose its markers to a shorter one with the same opening text.
+ * Resolved threads skip the match: the export never contains them, so
+ * any marker they matched would belong to an open thread.
  */
 export function joinThreads(parsed: ParsedExport, threads: readonly ApiThread[]): JoinResult {
   const claimed = new Set<number>();
   const placements = new Map<string, ThreadPlacement>();
+  const liveReplies = (t: ApiThread) => (t.replies ?? []).filter((r) => !r.deleted);
   const order = threads
     .map((t, i) => ({ t, i }))
-    .sort((a, b) => (b.t.replies?.length ?? 0) - (a.t.replies?.length ?? 0) || a.i - b.i);
+    .sort((a, b) => liveReplies(b.t).length - liveReplies(a.t).length || a.i - b.i);
 
   for (const { t } of order) {
     const id = t.id ?? "";
+    if (t.resolved) {
+      placements.set(id, { marker: null, candidates: [], unplaced: "resolved_not_in_export" });
+      continue;
+    }
     const tops = parsed.markers.filter(
       (m) => !claimed.has(m.n) && textMatches(t.content, parsed.bodies.get(m.n)),
     );
     if (tops.length === 0) {
-      placements.set(id, {
-        marker: null,
-        candidates: [],
-        unplaced: t.resolved ? "resolved_not_in_export" : "not_found_in_export",
-      });
+      placements.set(id, { marker: null, candidates: [], unplaced: "not_found_in_export" });
       continue;
     }
 
@@ -403,7 +460,7 @@ export function joinThreads(parsed: ParsedExport, threads: readonly ApiThread[])
       const replyMarkers: ExportMarker[] = [];
       const key = positionKey(top);
       let next = top.seq + 1;
-      for (const reply of t.replies ?? []) {
+      for (const reply of liveReplies(t)) {
         const m = parsed.markers[next];
         if (!m || claimed.has(m.n) || positionKey(m) !== key) break;
         if (!replyMatches(reply, parsed.bodies.get(m.n))) break;
@@ -589,35 +646,72 @@ function threadTagsEmail(t: ApiThread, email: string): boolean {
   });
 }
 
+// Room kept for the notes `fitToBudget` adds after measuring.
+const BUDGET_NOTE_RESERVE = 1_000;
+
+/** Keep the longest prefix of `items` whose JSON fits in `room` characters. */
+function keepPrefix<T>(items: T[], room: number): number {
+  let used = 0;
+  for (let i = 0; i < items.length; i++) {
+    used += JSON.stringify(items[i]).length + 1;
+    if (used > room) return i;
+  }
+  return items.length;
+}
+
 /**
  * Shrink the result until its JSON fits `max` characters: drop full rows,
- * then shorten comment text, then drop threads from the end. Each step
- * adds a note so the caller knows what is missing.
+ * then shorten comment text, then drop unmatched markers, then threads,
+ * from the end. Each step adds a note so the caller knows what is missing.
  */
 function fitToBudget(result: LocateResult, max: number): void {
   const size = () => JSON.stringify(result).length;
   if (size() <= max) return;
+  const notes = result.coverage.notes;
+
   if (result.rows) {
     delete result.rows;
-    for (const t of result.threads) if (t.location?.kind === "table_cell") delete t.location.rowRef;
-    result.coverage.notes.push("Full rows were dropped to fit the response size limit.");
+    for (const t of result.threads) {
+      for (const loc of [t.location, ...(t.candidates ?? [])]) {
+        if (loc?.kind === "table_cell") delete loc.rowRef;
+      }
+    }
+    for (const u of result.unmatchedMarkers) {
+      if (u.location.kind === "table_cell") delete u.location.rowRef;
+    }
+    notes.push("Full rows were dropped to fit the response size limit.");
     if (size() <= max) return;
   }
+
   for (const t of result.threads) {
     t.content = clip(t.content, 200);
     for (const r of t.replies ?? []) r.content = clip(r.content, 200);
   }
-  result.coverage.notes.push(
+  for (const u of result.unmatchedMarkers) u.text = clip(u.text, 200);
+  notes.push(
     "Comment and reply text was shortened to 200 characters to fit the response size limit.",
   );
-  let dropped = 0;
-  while (result.threads.length > 0 && size() > max) {
-    result.threads.pop();
-    dropped++;
+  if (size() <= max) return;
+
+  const { threads, unmatchedMarkers } = result;
+  result.threads = [];
+  result.unmatchedMarkers = [];
+  const room = max - size() - BUDGET_NOTE_RESERVE;
+
+  const keepThreads = keepPrefix(threads, room);
+  result.threads = threads.slice(0, keepThreads);
+  const left = room - JSON.stringify(result.threads).length;
+  const keepMarkers = keepPrefix(unmatchedMarkers, left);
+  result.unmatchedMarkers = unmatchedMarkers.slice(0, keepMarkers);
+
+  if (keepMarkers < unmatchedMarkers.length) {
+    notes.push(
+      `${unmatchedMarkers.length - keepMarkers} unmatched marker(s) were dropped to fit the response size limit.`,
+    );
   }
-  if (dropped > 0) {
-    result.coverage.notes.push(
-      `${dropped} thread(s) at the end of the list were dropped to fit the response size limit. Narrow the call with \`tabTitle\` or \`mentions\` to see them.`,
+  if (keepThreads < threads.length) {
+    notes.push(
+      `${threads.length - keepThreads} thread(s) at the end of the list were dropped to fit the response size limit. Narrow the call with \`tabTitle\` or \`mentions\` to see them.`,
     );
   }
 }
@@ -688,16 +782,17 @@ export function locateComments(input: LocateInput, opts: LocateOptions): LocateR
     const tab = opts.tab;
     threads = threads.filter((t) => {
       const tabs = t.location ? [t.location.tab] : (t.candidates ?? []).map((c) => c.tab);
-      return tabs.length === 0 || tabs.includes(tab);
+      return tabs.length === 0 || tabs.includes(tab) || tabs.includes(null);
     });
     notes.push(
-      `Filtered to tab "${tab}". Unplaced threads are kept, because their tab is unknown.`,
+      `Filtered to tab "${tab}". Threads whose tab is unknown (unplaced, or before the first tab title in the export) are kept.`,
     );
   }
   if (opts.mentions) {
     const email = opts.mentions;
+    const byId = new Map(open.map((o) => [o.id ?? "", o]));
     threads = threads.filter((t) => {
-      const src = open.find((o) => o.id === t.commentId);
+      const src = byId.get(t.commentId);
       return src ? threadTagsEmail(src, email) : false;
     });
     notes.push(`Filtered to threads that assign or mention ${email}.`);

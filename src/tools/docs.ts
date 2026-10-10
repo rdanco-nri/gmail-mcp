@@ -87,23 +87,30 @@ async function getDocWithTabs(
   return resp.data;
 }
 
-// Resolve a tab by exact title, then case-insensitive, then prefix
+// Match a tab title by exact title, then case-insensitive, then prefix
 // (so a forked "Checklist v2" still resolves for `tabTitle: "Checklist"`).
 // The LAST match wins — the latest forked tab is the reviewed one.
+// Returns the index into `titles`, or -1.
+function matchTabTitle(titles: readonly string[], wanted: string): number {
+  const lower = wanted.toLowerCase();
+  const tests = [
+    (t: string) => t === wanted,
+    (t: string) => t.toLowerCase() === lower,
+    (t: string) => t.toLowerCase().startsWith(lower),
+  ];
+  for (const ok of tests) {
+    const i = titles.findLastIndex(ok);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
 function resolveTabByTitle(
   doc: docs_v1.Schema$Document,
   title: string,
 ): docs_v1.Schema$Tab | undefined {
   const tabs = flattenTabs(doc.tabs);
-  const titleOf = (t: docs_v1.Schema$Tab) => t.tabProperties?.title ?? "";
-  const exact = tabs.filter((t) => titleOf(t) === title);
-  if (exact.length) return exact[exact.length - 1];
-  const lower = title.toLowerCase();
-  const ci = tabs.filter((t) => titleOf(t).toLowerCase() === lower);
-  if (ci.length) return ci[ci.length - 1];
-  const prefix = tabs.filter((t) => titleOf(t).toLowerCase().startsWith(lower));
-  if (prefix.length) return prefix[prefix.length - 1];
-  return undefined;
+  return tabs[matchTabTitle(tabs.map((t) => t.tabProperties?.title ?? ""), title)];
 }
 
 function getTabById(
@@ -873,7 +880,7 @@ export function registerDocsTools(
               "Cannot filter by tab: the Doc's tab titles could not be read. Call again without `tabTitle`.",
             );
           }
-          tab = resolveTitle(tabTitles, args.tabTitle);
+          tab = tabTitles[matchTabTitle(tabTitles, args.tabTitle)];
           if (!tab) {
             return structuredError(
               `No tab titled "${args.tabTitle}" found. Available tabs: ${tabTitles.join(", ")}.`,
@@ -908,7 +915,7 @@ export function registerDocsTools(
         };
       } catch (err) {
         const { code, message } = asGmailApiError(err);
-        if (code === 403 && /exportSizeLimitExceeded/i.test(message)) {
+        if (code === 403 && isExportTooLarge(err, message)) {
           return structuredError(
             `exportSizeLimitExceeded: the Doc's HTML export is over Drive's 10 MB cap, so comment positions are unavailable. Use drive_list_comments for the comments without positions.`,
           );
@@ -983,13 +990,12 @@ async function listTabTitles(docs: docs_v1.Docs, documentId: string): Promise<st
   }
 }
 
-// Same order as resolveTabByTitle: exact, case-insensitive, prefix; last match wins.
-function resolveTitle(titles: readonly string[], wanted: string): string | undefined {
-  const lower = wanted.toLowerCase();
-  const pick = (ok: (t: string) => boolean) => titles.filter(ok).at(-1);
-  return (
-    pick((t) => t === wanted) ??
-    pick((t) => t.toLowerCase() === lower) ??
-    pick((t) => t.toLowerCase().startsWith(lower))
-  );
+// Drive reports an over-cap export as a 403 whose reason sits in the
+// response body (`error.errors[].reason`), not always in the message.
+function isExportTooLarge(err: unknown, message: string): boolean {
+  if (/exportSizeLimitExceeded|too large to be exported/i.test(message)) return true;
+  const data = (err as { response?: { data?: unknown } }).response?.data as
+    | { error?: { errors?: { reason?: unknown }[] } }
+    | undefined;
+  return (data?.error?.errors ?? []).some((e) => e.reason === "exportSizeLimitExceeded");
 }

@@ -213,6 +213,54 @@ describe("parseExportMarkers", () => {
     const html = doc(`<p>x${ref(1)}</p>`, [body(1, "it&#39;s &quot;ok&quot; &#128293;")]);
     expect(parseExportMarkers(html).bodies.get(1)!.text).toBe('it\'s "ok" 🔥');
   });
+
+  it("keeps every body when several share one div", () => {
+    const html = doc(`<p>x${ref(1)}${ref(2)}</p>`, [
+      `<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>first</span></p>` +
+        `<p><a href="#cmnt_ref2" id="cmnt2">[b]</a><span>second</span></p></div>`,
+    ]);
+    const p = parseExportMarkers(html);
+    expect(p.bodies.get(1)!.text).toBe("first");
+    expect(p.bodies.get(2)!.text).toBe("second");
+  });
+
+  it("maps merged cells to grid columns and carries rowspans down", () => {
+    const span = (attrs: string, text: string, ...refs: number[]) =>
+      `<td ${attrs}><p><span>${text}</span>${refs.map(ref).join("")}</p></td>`;
+    const html = doc(
+      `<table>` +
+        row(cell("Section"), span('colspan="2"', "Owner"), cell("Status")) +
+        row(span('rowspan="2"', "Alpha"), cell("Ann"), cell("Bo"), cell("Open")) +
+        row(cell("Cy"), cell("Di"), cell("Done", 1)) +
+        `</table>`,
+      [body(1, "why done?")],
+    );
+    const p = parseExportMarkers(html);
+    expect(p.tables[0]!.rows).toEqual([
+      ["Section", "Owner", "Owner", "Status"],
+      ["Alpha", "Ann", "Bo", "Open"],
+      ["Alpha", "Cy", "Di", "Done"],
+    ]);
+    expect(p.markers[0]).toMatchObject({ rowIndex: 2, colIndex: 3 });
+  });
+
+  it("puts a comment on a heading under that heading", () => {
+    const html = doc(
+      `<h1><span>Spec</span></h1><h2><span>Section A</span></h2>` +
+        `<h2><span>Section B</span>${ref(1)}</h2>`,
+      [body(1, "rename this")],
+    );
+    const m = parseExportMarkers(html).markers[0]!;
+    expect(m.headingPath).toEqual(["Spec", "Section B"]);
+    expect(m.paragraphText).toBe("Section B");
+  });
+
+  it("gives a single-tab Doc's markers its tab without a title paragraph", () => {
+    const html = doc(`<p>x${ref(1)}</p>`, [body(1, "hi")]);
+    const p = parseExportMarkers(html, ["Tab 1"]);
+    expect(p.tabsSeen).toEqual(["Tab 1"]);
+    expect(p.markers[0]!.tab).toBe("Tab 1");
+  });
 });
 
 describe("joinThreads", () => {
@@ -277,6 +325,37 @@ describe("joinThreads", () => {
     expect(p.bodies.get(2)).toMatchObject({ text: "done", status: "resolve" });
     const { unmatchedMarkers } = joinThreads(p, [
       { id: "t", content: "fix this", replies: [{ content: "done", action: "resolve" }] },
+    ]);
+    expect(unmatchedMarkers).toEqual([]);
+  });
+
+  it("never lets a resolved thread take an open thread's marker", () => {
+    const html = doc(`<table>${row(cell("k"), cell("v", 1))}</table>`, [body(1, "Drop")]);
+    const p = parseExportMarkers(html);
+    const { placements } = joinThreads(p, [
+      { id: "open", content: "Drop", replies: [] },
+      { id: "done", content: "Drop", resolved: true, replies: [{ content: "ok" }] },
+    ]);
+    expect(placements.get("open")!.marker!.n).toBe(1);
+    expect(placements.get("done")).toMatchObject({
+      marker: null,
+      unplaced: "resolved_not_in_export",
+    });
+  });
+
+  it("skips deleted replies when matching a thread's reply markers", () => {
+    const html = doc(`<p>x${ref(1)}${ref(2)}${ref(3)}</p>`, [
+      body(1, "q"),
+      body(2, "a1"),
+      body(3, "a2"),
+    ]);
+    const p = parseExportMarkers(html);
+    const { unmatchedMarkers } = joinThreads(p, [
+      {
+        id: "t",
+        content: "q",
+        replies: [{ content: "gone", deleted: true }, { content: "a1" }, { content: "a2" }],
+      },
     ]);
     expect(unmatchedMarkers).toEqual([]);
   });
@@ -360,6 +439,60 @@ describe("locateComments", () => {
     expect(JSON.stringify(r).length).toBeLessThanOrEqual(5_000);
     expect(r.coverage.notes.join(" ")).toMatch(/shortened/);
     expect(r.coverage.notes.join(" ")).toMatch(/dropped/);
+  });
+
+  it("keeps threads with an unknown tab when filtering by tab", () => {
+    const html = doc(`<p>before${ref(1)}</p>` + tabTitle("A") + `<p>in A${ref(2)}</p>`, [
+      body(1, "early"),
+      body(2, "later"),
+    ]);
+    const r = locateComments(
+      input(
+        html,
+        [
+          { id: "early", content: "early" },
+          { id: "later", content: "later" },
+        ],
+        ["A", "B"],
+      ),
+      { ...OPTS, tab: "A" },
+    );
+    expect(r.threads.map((t) => t.commentId)).toEqual(["early", "later"]);
+    expect(r.threads[0]!.location!.tab).toBeNull();
+  });
+
+  it("fits the budget when unmatched markers alone overflow it", () => {
+    const refs = Array.from({ length: 60 }, (_, i) => i + 1);
+    const html = doc(
+      `<p>x${refs.map(ref).join("")}</p>`,
+      refs.map((n) => body(n, `${n} ${"y".repeat(900)}`)),
+    );
+    const r = locateComments(input(html, [{ id: "t", content: "1 " + "y".repeat(900) }]), {
+      ...OPTS,
+      maxTotalChars: 8_000,
+    });
+    expect(JSON.stringify(r).length).toBeLessThanOrEqual(8_000);
+    expect(r.threads.map((t) => t.commentId)).toEqual(["t"]);
+    expect(r.coverage.notes.join(" ")).toMatch(/unmatched marker\(s\) were dropped/);
+  });
+
+  it("clears rowRef on candidates when full rows are dropped", () => {
+    const html = doc(`<table>${row(cell("a", 1))}${row(cell("b", 2))}</table>`, [
+      body(1, "same"),
+      body(2, "same"),
+    ]);
+    const many: ApiThread[] = [
+      { id: "amb", content: "same" },
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `x${i}`, content: "z".repeat(400) })),
+    ];
+    const r = locateComments(input(html, many, []), {
+      ...OPTS,
+      includeFullRow: true,
+      maxTotalChars: 6_000,
+    });
+    expect(r.rows).toBeUndefined();
+    const amb = r.threads.find((t) => t.commentId === "amb")!;
+    expect(amb.candidates!.every((c) => !("rowRef" in c))).toBe(true);
   });
 
   it("truncates long comments and cells", () => {

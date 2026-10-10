@@ -43,6 +43,20 @@ function apiError(code: number, message: string): Error {
   return err;
 }
 
+// The over-cap shape Drive sends: a plain message, with the reason only
+// in the response body.
+function sizeError(): Error {
+  const err = apiError(403, "This file is too large to be exported.") as Error & {
+    response: unknown;
+  };
+  err.response = {
+    status: 403,
+    data: { error: { errors: [{ reason: "exportSizeLimitExceeded" }] } },
+  };
+  err.message = "Forbidden";
+  return err;
+}
+
 function mocks(data: MockData) {
   const calls: RecordedCall[] = [];
   const pages = data.pages ?? [
@@ -252,6 +266,7 @@ describe("docs_locate_comments", () => {
         },
         /exportSizeLimitExceeded[\s\S]*drive_list_comments/,
       ],
+      [{ exportError: sizeError() }, /exportSizeLimitExceeded[\s\S]*drive_list_comments/],
       [{ exportError: apiError(500, "backend") }, /HTTP 500/],
       [{ html: { not: "text" } }, /did not return text/],
     ];
