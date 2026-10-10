@@ -51,7 +51,7 @@ import {
 } from "../utl.js";
 import { asGmailApiError } from "../gmail-errors.js";
 
-const DOC_MIME = "application/vnd.google-apps.document";
+export const DOC_MIME = "application/vnd.google-apps.document";
 const SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const PRES_MIME = "application/vnd.google-apps.presentation";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -98,7 +98,7 @@ const DEFAULT_SEARCH_FIELDS =
 const DEFAULT_METADATA_FIELDS =
   "id,name,mimeType,owners(displayName,emailAddress),parents,modifiedTime,capabilities,webViewLink,size,shortcutDetails";
 
-async function getResolvedFileMeta(
+export async function getResolvedFileMeta(
   drive: drive_v3.Drive,
   fileId: string,
   fields: string,
@@ -727,13 +727,15 @@ export function registerDriveTools(
         // Drive v3 comments.list requires `fields` to be specified
         // (returns 400 otherwise). Inline-expand replies via the
         // `replies(...)` selection to avoid an N+1 replies.list loop.
+        // A reply's `action` ("resolve" / "reopen") is what distinguishes a
+        // status change from a reply with empty content.
         const res = await drive.comments.list({
           fileId: args.fileId,
           pageSize: args.pageSize,
           pageToken: args.pageToken,
           includeDeleted: false,
           fields:
-            "comments(id,author(displayName,emailAddress),content,createdTime,modifiedTime,resolved,deleted,anchor,quotedFileContent,replies(id,author(displayName,emailAddress),content,createdTime,modifiedTime,deleted)),nextPageToken",
+            "comments(id,author(displayName,emailAddress),content,createdTime,modifiedTime,resolved,deleted,anchor,quotedFileContent,assigneeEmailAddress,mentionedEmailAddresses,replies(id,author(displayName,emailAddress),content,createdTime,modifiedTime,deleted,action,assigneeEmailAddress,mentionedEmailAddresses)),nextPageToken",
         });
         const all = res.data.comments ?? [];
         const filtered = args.includeResolved ? all : all.filter((c) => !c.resolved);

@@ -881,6 +881,75 @@ export const DocsReadTabSchema = z.object({
     ),
 });
 
+export const DocsLocateCommentsSchema = z.object({
+  documentId: DriveIdSchema.describe(
+    "Target Google Doc ID (the same value the drive_* tools take as `fileId`).",
+  ),
+  tabTitle: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Keep only threads placed in this tab (exact, then case-insensitive, then prefix match, as in docs_read_tab).",
+    ),
+  mentions: z
+    .string()
+    .email()
+    .max(320)
+    .optional()
+    .describe(
+      "Keep only threads where this address is the assignee or is @-mentioned in the comment or a reply.",
+    ),
+  includeResolved: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Also list resolved threads (default false). They come back unplaced: the HTML export omits resolved threads.",
+    ),
+  includeFullRow: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Also return every cell of each commented table row, once per row in `rows[]` (default false: each location carries only the row key and the commented cell).",
+    ),
+  includeReplies: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Include each thread's replies (default true)."),
+  maxCellChars: coerceInt({ min: 20, max: 5000 })
+    .optional()
+    .default(200)
+    .describe("Truncate each cell, row key, and paragraph text to this many characters."),
+  maxCommentChars: coerceInt({ min: 50, max: 20000 })
+    .optional()
+    .default(1000)
+    .describe("Truncate each comment and reply body to this many characters."),
+});
+
+// Output contract for docs_locate_comments' structuredContent. Thread and
+// location objects are loose: the tool description documents their fields.
+export const DocsLocateCommentsOutputShape = {
+  fileId: z.string(),
+  name: z.string(),
+  modifiedTime: z.string().nullable(),
+  threads: z.array(z.looseObject({ commentId: z.string() })),
+  rows: z.array(z.looseObject({ rowRef: z.string() })).optional(),
+  unmatchedMarkers: z.array(z.looseObject({ text: z.string() })),
+  coverage: z.looseObject({
+    placed: z.number(),
+    unplaced: z.number(),
+    ambiguous: z.number(),
+    unmatchedMarkers: z.number(),
+    tabsSeen: z.array(z.string()),
+    tabs: z.array(z.string()).nullable(),
+    notes: z.array(z.string()),
+  }),
+};
+
 // Sheets operations (v0.33) — full-tab overwrite.
 export const SheetsWriteTabSchema = z.object({
   fileId: DriveIdSchema.describe("Target Google Sheets spreadsheet ID."),
@@ -1612,9 +1681,9 @@ export const toolDefinitions: ToolDefinition[] = [
     description: [
       "List comments on a Drive file with reply threads inline-expanded in a single call.",
       "",
-      "USE WHEN: reviewing comments left on a Doc / Sheet / Slides for response. The Drive API has no cross-file comment inbox endpoint — to discover *which* files have new comments addressed to you, use the existing Gmail tool `search_emails` with `from:comments-noreply@docs.google.com newer_than:7d`, extract the fileId from the notification email body or URL, then call this tool. By default resolved comments are excluded (set `includeResolved: true` to include them).",
+      'USE WHEN: reviewing comments left on a Doc / Sheet / Slides for response. The Drive API has no cross-file comment inbox endpoint — to discover *which* files have new comments addressed to you, use the existing Gmail tool `search_emails` with `from:comments-noreply@docs.google.com newer_than:7d`, extract the fileId from the notification email body or URL, then call this tool. By default resolved comments are excluded (set `includeResolved: true` to include them). A reply with `action: "resolve"` or `"reopen"` is a status change, not a message; its `content` may be empty.',
       "",
-      "DO NOT USE: to read the underlying file content (use `drive_read_file`).",
+      "DO NOT USE: to read the underlying file content (use `drive_read_file`). To find which section or table row of a Google Doc a comment sits on, use `docs_locate_comments` — the quoted text here is a snapshot from when the comment was made and cannot identify a row.",
     ].join("\n"),
     schema: DriveListCommentsSchema,
     scopes: ["drive", "drive.readonly"],
@@ -1747,6 +1816,29 @@ export const toolDefinitions: ToolDefinition[] = [
     schema: DocsReadTabSchema,
     scopes: ["documents"],
     annotations: { title: "Docs: Read Tab", readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "docs_locate_comments",
+    description: [
+      "List the open comment threads on a Google Doc, each with WHERE it sits now: tab, heading path, and — for a comment in a table — the row and column. Reads the Doc's HTML export (which marks each open comment at its current position) and joins it to the Drive comments API for authors, times, replies, and resolve/reopen actions.",
+      "",
+      "USE WHEN: reviewing comments on a Doc built around tables (review checklists, trackers, specs), where the highlighted text alone cannot tell which row a comment is about — e.g. a highlight of the single word 'Drop'. Also for 'which comments tag me on this doc' via `mentions`.",
+      "",
+      "DO NOT USE: on Sheets or Slides, or when only the comment text is needed — `drive_list_comments` is cheaper and covers every file type. To answer a thread, pass its `commentId` to `drive_reply_to_comment`.",
+      "",
+      "RETURNS: `threads[]` in document order, unplaced threads last. Each thread: `commentId`, `author {name, me}`, `createdTime`, `content`, `highlightAtCommentTime` (the quoted text when the comment was made; may be stale), `assignee`, `mentions[]`, `replies[]` (`action` is `resolve` or `reopen` on a status change), and `location` — `{kind: 'table_cell', tab, headingPath, tableIndex, rowIndex (0-based, header row is 0), rowKey (first non-empty cell, e.g. the row's ID), column (header text), cellText}` or `{kind: 'paragraph', tab, headingPath, text}` — or `location: null` with `unplaced {code, reason}`. `ambiguous: true` means two places matched equally; `candidates[]` lists both, and `highlightAtCommentTime` usually decides. `coverage` holds counts and plain-language `notes[]`; read them before concluding a comment is missing. `unmatchedMarkers[]` lists comments found in the export but not in the API.",
+      "",
+      "LIMITS: resolved threads are never placed (the export omits them). Suggested edits are not comments and are not returned. Author emails are not available from Google.",
+      "",
+      "SIDE EFFECTS: none — read-only.",
+    ].join("\n"),
+    schema: DocsLocateCommentsSchema,
+    scopes: ["drive", "drive.readonly"],
+    annotations: {
+      title: "Docs: Locate Comments",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
   },
 
   // =====================================================================
