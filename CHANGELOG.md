@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool descriptions route docs and decks to the native builders.** On 2026-10-21 a session asked for "a Google Doc" converted its markdown to .docx with pandoc and uploaded it, because `drive_upload_file` said to use it when "a deck, doc, or sheet was built locally" and `docs_create_release_doc` said it was for release notes. `drive_upload_file` now says a doc written from text is built with `docs_create_release_doc` and `docs_write_tab`. `docs_create_release_doc` covers any new doc and names `tabTitles` for a single tab. `docs_write_tab` says a call writes its table before its markdown and that `replace` removes others' edits and comment anchors. `slides_create_deck_from_outline` and `slides_append_to_deck` say a branded deck is built locally and uploaded. Tool names are unchanged. `src/tools-routing.test.ts` pins the routing lines.
+
 ### Fixed
 
 - **Docs table column widths no longer follow one outlier cell.** `estimateColWidthsPt` set a column's target from its single widest cell, so a Sources cell listing 27 references made that column ~600pt and squeezed Description to a word per line. The target is now the 80th-percentile cell width and the slack-reclaim pass never buys a width above it; an outlier cell wraps deeper on its own.
