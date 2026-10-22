@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Links, italics, and numbered lists in `docs_write_tab` markdown.** The only route to a clickable link in a Doc was a .docx upload, which loses the tabs, widths, and table style. The markdown subset now renders `[text](url)` as a link (http, https, and mailto only; underlined in Docs' link blue `#1155CC`), `*italic*` and `_italic_` as italics (a marker opens only at a word start and closes only at a word end, so `snake_case` and `2 * 3` stay literal), and runs of `1. ` lines as one numbered list (one `createParagraphBullets` with `NUMBERED_DECIMAL_ALPHA_ROMAN` per run, so the numbering continues). Markers do not nest. `docs_read_tab` reads all three back: links as `[text](url)`, italics as `*text*`, and numbered items as `1. `, `2. `, counted per list from `documentTab.lists`. The parser, the request builder, and the read-back helpers move from `docs.ts` into the pure module `src/tools/docs-markdown.ts`, covered by `src/tools/docs-markdown.test.ts`. Links inside table cells are not supported.
+
 ### Changed
 
 - **Tool descriptions route docs and decks to the native builders.** On 2026-10-21 a session asked for "a Google Doc" converted its markdown to .docx with pandoc and uploaded it, because `drive_upload_file` said to use it when "a deck, doc, or sheet was built locally" and `docs_create_release_doc` said it was for release notes. `drive_upload_file` now says a doc written from text is built with `docs_create_release_doc` and `docs_write_tab`. `docs_create_release_doc` covers any new doc and names `tabTitles` for a single tab. `docs_write_tab` says a call writes its table before its markdown and that `replace` removes others' edits and comment anchors. `slides_create_deck_from_outline` and `slides_append_to_deck` say a branded deck is built locally and uploaded. Tool names are unchanged. `src/tools-routing.test.ts` pins the routing lines.
