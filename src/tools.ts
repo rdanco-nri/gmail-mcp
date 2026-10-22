@@ -827,7 +827,7 @@ export const DocsWriteTabSchema = z.object({
     .max(200000)
     .optional()
     .describe(
-      "Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, blank-line-separated blocks become paragraphs. Inline **bold** and `code` render as bold and monospace, and lines between ``` fences render as a shaded monospace code block. Use for the Draft tab.",
+      "Narrative text to insert: '# '/'## '/'### ' lines become headings, '- ' lines become bullets, '1. ' lines become a numbered list, and every line becomes its own paragraph. Inline **bold**, *italic* (or _italic_), `code`, and [text](https://url) links render as bold, italic, monospace, and clickable links; markers do not nest. Lines between ``` fences render as a shaded monospace code block. Table cells take plain text only.",
     ),
   columnWidths: z
     .array(z.number().min(24).max(600))
@@ -1790,11 +1790,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "docs_write_tab",
     description: [
-      "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## '/'### ' headings, '- ' bullets, blank-line-separated paragraphs, inline `**bold**` and `` `code` ``, and ``` fenced code blocks). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
+      "Write content into one tab of an existing Google Doc. Accepts a native `table` (rows of cells; first row is the header) and/or `markdown` narrative ('# '/'## '/'### ' headings, '- ' bullets, '1. ' numbered lists, one paragraph per line, inline `**bold**`, `*italic*`, `` `code` ``, and `[text](url)` links, and ``` fenced code blocks). Target the tab by `tabId` or `tabTitle`. **Edits are written immediately and visible to every collaborator.**",
       "",
       "USE WHEN: populating a tab with tables (`table`) and narrative (`markdown`), such as the Checklist and Draft tabs of a release-notes doc. A call carrying both writes the table first and the markdown after it, so pair each table with the text that follows it. `mode: replace` (default) clears the tab body first, which also removes other people's edits and comment anchors in that tab; `mode: append` adds after existing content. Pass `columnWidths` (pt per column) to fix the layout instead of the content-proportional estimate. Pass `tableStyle` alongside `table` for a branded table: header-row fill + bold colored header text, alternating data-row shading, and uniform hairline borders (e.g. navy `#131166` header, `#f5f6f8` zebra, `#ececee` 0.5pt grid).",
       "",
-      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Rich formatting beyond headings, bullets, inline bold/code, fenced code blocks, and the `tableStyle` table treatments is out of scope.",
+      "DO NOT USE: to create the doc or its tabs (use `docs_create_release_doc`). Formatting beyond headings, bullets, numbered lists, inline bold/italic/code/links, fenced code blocks, and the `tableStyle` table treatments is out of scope; nested lists, `####` headings, images, and links inside table cells render as literal text or not at all.",
       "",
       "SIDE EFFECTS: persistent edits to the named tab, visible to collaborators. Table fills run a multi-pass batchUpdate (insert table, re-read cell indices, fill cells in descending index order). Requires the `documents` scope.",
     ].join("\n"),

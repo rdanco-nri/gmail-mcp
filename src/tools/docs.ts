@@ -45,15 +45,14 @@ import { locateComments } from "../doc-comment-locations.js";
 import { DOC_MIME, getResolvedFileMeta } from "./drive.js";
 import { estimateColWidthsPt } from "./docs-table-widths.js";
 import { buildTableStyleRequests, type HeaderCellRange } from "./docs-table-style.js";
+import {
+  buildMarkdownRequests,
+  listMarkerFor,
+  paragraphMarkdown,
+  parseMarkdownBlock,
+} from "./docs-markdown.js";
 
 const DEFAULT_TAB_TITLES = ["Checklist", "Draft"];
-
-// Monospace font + light background used for inline `code` and fenced
-// code blocks (Docs has no native code style; this is the convention).
-const CODE_FONT = "Courier New";
-const CODE_BG: docs_v1.Schema$OptionalColor = {
-  color: { rgbColor: { red: 0.94, green: 0.94, blue: 0.94 } },
-};
 
 function structuredError(message: string): {
   content: { type: string; text: string }[];
@@ -110,13 +109,15 @@ function resolveTabByTitle(
   title: string,
 ): docs_v1.Schema$Tab | undefined {
   const tabs = flattenTabs(doc.tabs);
-  return tabs[matchTabTitle(tabs.map((t) => t.tabProperties?.title ?? ""), title)];
+  return tabs[
+    matchTabTitle(
+      tabs.map((t) => t.tabProperties?.title ?? ""),
+      title,
+    )
+  ];
 }
 
-function getTabById(
-  doc: docs_v1.Schema$Document,
-  tabId: string,
-): docs_v1.Schema$Tab | undefined {
+function getTabById(doc: docs_v1.Schema$Document, tabId: string): docs_v1.Schema$Tab | undefined {
   return flattenTabs(doc.tabs).find((t) => t.tabProperties?.tabId === tabId);
 }
 
@@ -139,26 +140,6 @@ function paragraphText(p: docs_v1.Schema$Paragraph): string {
     .replace(/\n$/, "");
 }
 
-// Like paragraphText, but reflects inline styling back into markdown so a
-// round-trip read shows the same `**bold**` / `` `code` `` markers that
-// were written — bold runs wrap in `**`, monospace runs wrap in backticks.
-function paragraphMarkdown(p: docs_v1.Schema$Paragraph): string {
-  let out = "";
-  for (const e of p.elements ?? []) {
-    const stripped = (e.textRun?.content ?? "").replace(/\n$/, "");
-    if (!stripped) continue;
-    const style = e.textRun?.textStyle;
-    if (style?.bold) {
-      out += `**${stripped}**`;
-    } else if (style?.weightedFontFamily?.fontFamily === CODE_FONT) {
-      out += `\`${stripped}\``;
-    } else {
-      out += stripped;
-    }
-  }
-  return out;
-}
-
 const HEADING_PREFIX: Record<string, string> = {
   TITLE: "# ",
   HEADING_1: "# ",
@@ -168,18 +149,21 @@ const HEADING_PREFIX: Record<string, string> = {
 };
 
 // Serialize one tab's body to markdown: headings via named style,
-// bullets via `- `, and native tables as markdown tables (first row
-// rendered as the header, with a separator row). Enough fidelity for a
-// downstream parser to recover a checklist table or read the narrative.
+// bullets via `- `, numbered list items via `1. `, and native tables as
+// markdown tables (first row rendered as the header, with a separator
+// row). Enough fidelity for a downstream parser to recover a checklist
+// table or read the narrative.
 function serializeTabBody(tab: docs_v1.Schema$Tab): string {
   const content = tab.documentTab?.body?.content ?? [];
+  const lists = tab.documentTab?.lists ?? undefined;
+  const counters = new Map<string, number>();
   const lines: string[] = [];
   for (const el of content) {
     if (el.paragraph) {
       const text = paragraphMarkdown(el.paragraph);
       const named = el.paragraph.paragraphStyle?.namedStyleType ?? "";
       if (el.paragraph.bullet) {
-        lines.push(`- ${text}`);
+        lines.push(`${listMarkerFor(el.paragraph.bullet, lists, counters)}${text}`);
       } else if (HEADING_PREFIX[named]) {
         lines.push(`${HEADING_PREFIX[named]}${text}`);
       } else {
@@ -204,110 +188,10 @@ function serializeTabBody(tab: docs_v1.Schema$Tab): string {
       });
     }
   }
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-type InlineSpanType = "bold" | "code";
-interface InlineSpan {
-  start: number; // offset within the paragraph content (stripped text)
-  end: number; // exclusive
-  type: InlineSpanType;
-}
-
-interface ParsedParagraph {
-  start: number; // offset within the inserted text block
-  len: number; // content length (excluding the trailing newline)
-  style?: string; // named style type for a heading
-  bullet?: boolean;
-  code?: boolean; // a fenced-code line — whole paragraph rendered monospace
-  spans?: InlineSpan[]; // inline bold / code ranges within the content
-}
-
-// Strip inline `**bold**` and `` `code` `` markers from one line of
-// content, returning the clean text plus the character ranges (relative
-// to that clean text) that need character-level styling. A marker that
-// never closes is left as literal text.
-function parseInline(content: string): { text: string; spans: InlineSpan[] } {
-  const spans: InlineSpan[] = [];
-  let out = "";
-  let i = 0;
-  while (i < content.length) {
-    if (content.startsWith("**", i)) {
-      const close = content.indexOf("**", i + 2);
-      if (close !== -1) {
-        const inner = content.slice(i + 2, close);
-        const start = out.length;
-        out += inner;
-        spans.push({ start, end: out.length, type: "bold" });
-        i = close + 2;
-        continue;
-      }
-    }
-    if (content[i] === "`") {
-      const close = content.indexOf("`", i + 1);
-      if (close !== -1) {
-        const inner = content.slice(i + 1, close);
-        const start = out.length;
-        out += inner;
-        spans.push({ start, end: out.length, type: "code" });
-        i = close + 1;
-        continue;
-      }
-    }
-    out += content[i];
-    i += 1;
-  }
-  return { text: out, spans };
-}
-
-// Turn the markdown-ish narrative into one text blob plus per-paragraph
-// descriptors (offsets relative to the blob start). '# '/'## '/'### ' →
-// heading, '- '/'* ' → bullet, a ``` fence toggles a monospace code
-// block, and inline '**bold**' / '`code`' become styled spans.
-function parseMarkdownBlock(markdown: string): { text: string; paras: ParsedParagraph[] } {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  let text = "";
-  const paras: ParsedParagraph[] = [];
-  let inCode = false;
-  for (const raw of lines) {
-    if (/^```/.test(raw)) {
-      inCode = !inCode;
-      continue; // the fence line itself is not emitted
-    }
-    if (inCode) {
-      const start = text.length;
-      text += `${raw}\n`;
-      paras.push({ start, len: raw.length, code: true });
-      continue;
-    }
-    let content = raw;
-    let style: string | undefined;
-    let bullet = false;
-    if (raw.startsWith("### ")) {
-      content = raw.slice(4);
-      style = "HEADING_3";
-    } else if (raw.startsWith("## ")) {
-      content = raw.slice(3);
-      style = "HEADING_2";
-    } else if (raw.startsWith("# ")) {
-      content = raw.slice(2);
-      style = "HEADING_1";
-    } else if (raw.startsWith("- ") || raw.startsWith("* ")) {
-      content = raw.slice(2);
-      bullet = true;
-    }
-    const { text: stripped, spans } = parseInline(content);
-    const start = text.length;
-    text += `${stripped}\n`;
-    paras.push({
-      start,
-      len: stripped.length,
-      style,
-      bullet,
-      spans: spans.length ? spans : undefined,
-    });
-  }
-  return { text, paras };
+  return lines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function registerDocsTools(
@@ -430,7 +314,9 @@ export function registerDocsTools(
               type: "text",
               text: `Doc "${args.title}" created with ${resolvedTabs.length} tab(s): ${resolvedTabs
                 .map((t) => t.title)
-                .join(", ")}${pagelessApplied ? " (pageless)" : ""}.\nID: ${documentId}\nLink: ${webViewLink}`,
+                .join(
+                  ", ",
+                )}${pagelessApplied ? " (pageless)" : ""}.\nID: ${documentId}\nLink: ${webViewLink}`,
             },
           ],
           structuredContent: result,
@@ -463,9 +349,7 @@ export function registerDocsTools(
     async (args) => {
       try {
         if (!args.table && !args.markdown) {
-          return structuredError(
-            "docs_write_tab requires at least one of `table` or `markdown`.",
-          );
+          return structuredError("docs_write_tab requires at least one of `table` or `markdown`.");
         }
         const mode = args.mode ?? "replace";
 
@@ -484,9 +368,7 @@ export function registerDocsTools(
         if (!tabId) {
           tabId = flattenTabs(doc.tabs)[0]?.tabProperties?.tabId ?? undefined;
           if (!tabId) {
-            return structuredError(
-              `Document ${args.documentId} exposed no tabs to write to.`,
-            );
+            return structuredError(`Document ${args.documentId} exposed no tabs to write to.`);
           }
         }
 
@@ -668,79 +550,12 @@ export function registerDocsTools(
           const reread = await getDocWithTabs(docs, args.documentId);
           const tab = getTabById(reread, tabId);
           const insertAt = tab ? Math.max(1, tabBodyEndIndex(tab) - 1) : 1;
-          const { text, paras } = parseMarkdownBlock(args.markdown);
-          const requests: docs_v1.Schema$Request[] = [
-            { insertText: { text, location: { index: insertAt, tabId } } },
-          ];
-          for (const p of paras) {
-            const startIndex = insertAt + p.start;
-            const endIndex = startIndex + p.len + 1; // include the trailing newline
-            const contentEnd = startIndex + p.len; // excludes the trailing newline
-            if (p.style) {
-              requests.push({
-                updateParagraphStyle: {
-                  range: { startIndex, endIndex, tabId },
-                  paragraphStyle: { namedStyleType: p.style },
-                  fields: "namedStyleType",
-                },
-              });
-            } else if (p.bullet) {
-              requests.push({
-                createParagraphBullets: {
-                  range: { startIndex, endIndex, tabId },
-                  bulletPreset: "BULLET_DISC_CIRCLE_SQUARE",
-                },
-              });
-            }
-            // Fenced code line: monospace the run and shade the paragraph.
-            if (p.code && p.len > 0) {
-              requests.push({
-                updateTextStyle: {
-                  range: { startIndex, endIndex: contentEnd, tabId },
-                  textStyle: { weightedFontFamily: { fontFamily: CODE_FONT } },
-                  fields: "weightedFontFamily",
-                },
-              });
-              requests.push({
-                updateParagraphStyle: {
-                  range: { startIndex, endIndex, tabId },
-                  paragraphStyle: { shading: { backgroundColor: CODE_BG } },
-                  fields: "shading.backgroundColor",
-                },
-              });
-            }
-            // Inline bold / code spans within the paragraph content.
-            for (const span of p.spans ?? []) {
-              const s = startIndex + span.start;
-              const e = startIndex + span.end;
-              if (e <= s) continue;
-              if (span.type === "bold") {
-                requests.push({
-                  updateTextStyle: {
-                    range: { startIndex: s, endIndex: e, tabId },
-                    textStyle: { bold: true },
-                    fields: "bold",
-                  },
-                });
-              } else {
-                requests.push({
-                  updateTextStyle: {
-                    range: { startIndex: s, endIndex: e, tabId },
-                    textStyle: {
-                      weightedFontFamily: { fontFamily: CODE_FONT },
-                      backgroundColor: CODE_BG,
-                    },
-                    fields: "weightedFontFamily,backgroundColor",
-                  },
-                });
-              }
-            }
-          }
+          const parsed = parseMarkdownBlock(args.markdown);
           await docs.documents.batchUpdate({
             documentId: args.documentId,
-            requestBody: { requests },
+            requestBody: { requests: buildMarkdownRequests(parsed, insertAt, tabId) },
           });
-          markdownParas = paras.length;
+          markdownParas = parsed.paras.length;
         }
 
         const webViewLink = docWebViewLink(args.documentId);
